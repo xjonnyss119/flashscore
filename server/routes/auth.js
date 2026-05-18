@@ -1,9 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
-const nodemailer = require("nodemailer");
 const pool = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
+
+function generateCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 async function sendVerificationEmail(toEmail, code) {
   const apiKey = process.env.UNISENDER_API_KEY;
@@ -36,9 +39,9 @@ async function sendVerificationEmail(toEmail, code) {
   const response = await fetch("https://api.unisender.com/ru/api/sendEmail", {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: params.toString()
+    body: params.toString(),
   });
 
   const result = await response.json();
@@ -46,31 +49,6 @@ async function sendVerificationEmail(toEmail, code) {
   if (!response.ok || result.error) {
     throw new Error(`Unisender Error: ${result.error || "Unknown error"}`);
   }
-}
-
-function generateCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-async function sendVerificationEmail(toEmail, code) {
-  await transporter.sendMail({
-    from: `"Flashscore" <${process.env.SMTP_USER}>`,
-    to: toEmail,
-    subject: "Подтверждение регистрации",
-    text: `Ваш код подтверждения: ${code}\n\nКод действителен 24 часа.`,
-    html: `
-      <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
-        <h2>Подтвердите ваш email</h2>
-        <p>Ваш код подтверждения:</p>
-        <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px;
-                    padding: 16px; background: #f5f5f5; text-align: center;
-                    border-radius: 8px; margin: 16px 0;">
-          ${code}
-        </div>
-        <p style="color: #888; font-size: 14px;">Код действителен 24 часа.</p>
-      </div>
-    `,
-  });
 }
 
 router.post("/register", async (req, res) => {
@@ -115,32 +93,17 @@ router.post("/register", async (req, res) => {
       message: "Код подтверждения отправлен на ваш email.",
     });
   } catch (err) {
-    console.error("[AUTH] Register error — code:", err.code);
-    console.error("[AUTH] Register error — message:", err.message);
+    console.error("[AUTH] Register error:", err.message);
 
-    const isSmtpError =
-      [
-        "EAUTH",
-        "ECONNECTION",
-        "ETIMEDOUT",
-        "EENVELOPE",
-        "EMESSAGE",
-        "ESOCKET",
-      ].includes(err.code) ||
-      (typeof err.responseCode === "number" && err.responseCode >= 400);
+    try {
+      await pool.query("DELETE FROM pending_verifications WHERE email = $1", [
+        req.body.email?.toLowerCase().trim(),
+      ]);
+    } catch (_) {}
 
-    if (isSmtpError) {
-      try {
-        await pool.query("DELETE FROM pending_verifications WHERE email = $1", [
-          req.body.email?.toLowerCase().trim(),
-        ]);
-      } catch (_) {}
-      return res
-        .status(502)
-        .json({ error: "Не удалось отправить письмо. Попробуйте позже." });
-    }
-
-    res.status(500).json({ error: "Ошибка сервера" });
+    return res
+      .status(502)
+      .json({ error: "Не удалось отправить письмо. Попробуйте позже." });
   }
 });
 
