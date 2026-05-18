@@ -177,18 +177,16 @@ export default function StandingsScreen() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // Проверка прав администратора (строго 1 раз при монтировании)
   useEffect(() => {
     getMe()
       .then((res) => {
-        if (res.data && res.data.role === "admin") {
-          setIsAdmin(true);
-        } else {
-          setIsAdmin(false);
-        }
+        setIsAdmin(res.data && res.data.role === "admin");
       })
       .catch(() => setIsAdmin(false));
   }, []);
 
+  // Фокусный эффект для загрузки лиг и безопасного выставления активной лиги
   useFocusEffect(
     useCallback(() => {
       getLeagues().then((res) => {
@@ -198,12 +196,15 @@ export default function StandingsScreen() {
         }));
         setLeagues(normalized);
 
+        // Корректно выбираем или сохраняем текущую лигу без создания бесконечных петель
         setSelectedLeague((prevSelected) => {
           if (prevSelected) {
             const stillExists = normalized.find(
               (l) => l.id === prevSelected.id,
             );
-            if (stillExists) return stillExists;
+            if (stillExists && stillExists.sport_id === selectedSportId) {
+              return stillExists;
+            }
           }
           return normalized.find((l) => l.sport_id === selectedSportId) || null;
         });
@@ -211,24 +212,32 @@ export default function StandingsScreen() {
     }, [selectedSportId]),
   );
 
+  // Фильтруем лиги прямо во время рендеринга
   const filteredLeagues = leagues.filter((l) => l.sport_id === selectedSportId);
 
+  // Слушатель для автоматического переключения на первую доступную лигу при смене вида спорта
   useEffect(() => {
-    if (
-      filteredLeagues.length > 0 &&
-      (!selectedLeague || selectedLeague.sport_id !== selectedSportId)
-    ) {
-      setSelectedLeague(filteredLeagues[0]);
-    } else if (filteredLeagues.length === 0) {
-      setSelectedLeague(null);
-      setStandings([]);
+    if (filteredLeagues.length > 0) {
+      if (!selectedLeague || selectedLeague.sport_id !== selectedSportId) {
+        setSelectedLeague(filteredLeagues[0]);
+      }
+    } else {
+      if (selectedLeague !== null) {
+        setSelectedLeague(null);
+        setStandings([]);
+      }
     }
-  }, [selectedSportId, leagues, selectedLeague, filteredLeagues]);
+  }, [selectedSportId, leagues]);
 
+  // Загрузка турнирной таблицы при смене лиги
   useEffect(() => {
-    if (!selectedLeague) return;
+    if (!selectedLeague) {
+      setStandings([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    setStandings([]);
     getStandings(selectedLeague.id)
       .then((res) => setStandings(res.data))
       .catch(() => setStandings([]))

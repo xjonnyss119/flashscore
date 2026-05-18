@@ -289,6 +289,19 @@ async function finishAndAddToStandings(
   };
 
   await updateStandings(finalMatchData);
+
+  const countRes = await pool.query("SELECT COUNT(*) FROM matches");
+  if (parseInt(countRes.rows[0].count, 10) >= 49) {
+    await pool.query(`
+      DELETE FROM matches 
+      WHERE id IN (
+        SELECT id FROM matches 
+        WHERE status = 'finished' 
+        ORDER BY updated_at ASC 
+        LIMIT 20
+      )
+    `);
+  }
 }
 
 async function notifyFavoriteUsers(matchId, eventType, message) {
@@ -369,7 +382,7 @@ async function updateStandings(match) {
         aW = is_overtime ? 0 : 1;
         aW_ot = is_overtime ? 1 : 0;
         aP = 2;
-      } 
+      }
     } else if (sportId === 3) {
       if (home_score > away_score) {
         hW = 1;
@@ -431,10 +444,6 @@ async function updateStandings(match) {
 
 async function runSimulationTick() {
   try {
-    await pool.query(
-      "DELETE FROM matches WHERE status = 'finished' AND updated_at < NOW() - INTERVAL '1 day'",
-    );
-
     const statsRes = await pool.query(`
       SELECT status, COUNT(*) as count 
       FROM matches 
