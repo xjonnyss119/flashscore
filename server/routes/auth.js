@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
-const nodemailer = require("nodemailer"); 
 const pool = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
 
@@ -9,40 +8,33 @@ function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-const transporter = nodemailer.createTransport({
-  host: "94.100.180.160", 
-  port: 465,
-  secure: true, 
-  auth: {
-    user: process.env.SMTP_USER, 
-    pass: process.env.SMTP_PASS, 
-  },
-  tls: {
-    rejectUnauthorized: false,
-    servername: "smtp.mail.ru"
-  }
-});
-
 async function sendVerificationEmail(toEmail, code) {
-  const mailOptions = {
-    from: `"Flashscore App" <${process.env.SMTP_USER}>`,
-    to: toEmail,
-    subject: "Подтверждение регистрации",
-    html: `
-      <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
-        <h2>Подтвердите ваш email</h2>
-        <p>Ваш код подтверждения:</p>
-        <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px;
-                    padding: 16px; background: #f5f5f5; text-align: center;
-                    border-radius: 8px; margin: 16px 0;">
-          ${code}
-        </div>
-        <p style="color: #888; font-size: 14px;">Код действителен 24 часа.</p>
-      </div>
-    `,
-  };
+  const serviceId = process.env.EMAILJS_SERVICE_ID;
+  const templateId = process.env.EMAILJS_TEMPLATE_ID;
+  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
+  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
 
-  await transporter.sendMail(mailOptions);
+  const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      service_id: serviceId,
+      template_id: templateId,
+      user_id: publicKey,
+      accessToken: privateKey,
+      template_params: {
+        to_email: toEmail,
+        code: code,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`EmailJS Error: ${response.status} - ${errorText}`);
+  }
 }
 
 router.post("/register", async (req, res) => {
@@ -105,39 +97,28 @@ router.post("/verify", async (req, res) => {
   const client = await pool.connect();
   try {
     const { email, code } = req.body;
-
     if (!email || !code)
       return res.status(400).json({ error: "Email и код обязательны" });
-
     const normalizedEmail = email.toLowerCase().trim();
-
     const result = await pool.query(
       "SELECT * FROM pending_verifications WHERE email = $1",
       [normalizedEmail],
     );
-
     if (result.rows.length === 0)
       return res.status(404).json({ error: "Сначала пройдите регистрацию" });
-
     const pending = result.rows[0];
-
     if (pending.verification_code !== code)
       return res.status(400).json({ error: "Неверный код подтверждения" });
 
     await client.query("BEGIN");
-
     await client.query(
-      `INSERT INTO users (email, password_hash, is_verified)
-       VALUES ($1, $2, TRUE)`,
+      `INSERT INTO users (email, password_hash, is_verified) VALUES ($1, $2, TRUE)`,
       [normalizedEmail, pending.password_hash],
     );
-
     await client.query("DELETE FROM pending_verifications WHERE email = $1", [
       normalizedEmail,
     ]);
-
     await client.query("COMMIT");
-
     res.json({ message: "Email подтверждён. Теперь вы можете войти." });
   } catch (err) {
     await client.query("ROLLBACK");
@@ -151,28 +132,20 @@ router.post("/verify", async (req, res) => {
 router.post("/resend-code", async (req, res) => {
   try {
     const { email } = req.body;
-
     if (!email) return res.status(400).json({ error: "Email обязателен" });
-
     const normalizedEmail = email.toLowerCase().trim();
-
     const result = await pool.query(
       "SELECT id FROM pending_verifications WHERE email = $1",
       [normalizedEmail],
     );
-
     if (result.rows.length === 0)
       return res.status(404).json({ error: "Сначала пройдите регистрацию" });
-
     const code = generateCode();
-
     await pool.query(
       "UPDATE pending_verifications SET verification_code = $1, created_at = NOW() WHERE email = $2",
       [code, normalizedEmail],
     );
-
     await sendVerificationEmail(normalizedEmail, code);
-
     res.json({ message: "Новый код отправлен на ваш email." });
   } catch (err) {
     console.error("[AUTH] Resend error:", err);
@@ -183,12 +156,9 @@ router.post("/resend-code", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-
     if (!email || !password)
       return res.status(400).json({ error: "Email и пароль обязательны" });
-
     const normalizedEmail = email.toLowerCase().trim();
-
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [
       normalizedEmail,
     ]);
@@ -206,16 +176,13 @@ router.post("/login", async (req, res) => {
       }
       return res.status(401).json({ error: "Неверный email или пароль" });
     }
-
     const user = result.rows[0];
-
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match)
       return res.status(401).json({ error: "Неверный email или пароль" });
 
     req.session.userId = user.id;
     req.session.role = user.role;
-
     res.json({
       message: "Вход выполнен",
       user: { id: user.id, email: user.email, role: user.role },
