@@ -5,7 +5,7 @@ const BASE_URL = " https://flashscore-backend-r1js.onrender.com/api"
 const api = axios.create({
   baseURL: BASE_URL,
   withCredentials: true,
-  timeout: 60000,
+  timeout: 120000,
 });
 
 
