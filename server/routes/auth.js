@@ -13,6 +13,12 @@ const transporter = nodemailer.createTransport({
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
+  dns: {
+    family: 4,
+  },
 });
 
 function generateCode() {
@@ -86,9 +92,14 @@ router.post("/register", async (req, res) => {
     console.error("[AUTH] Register error — message:", err.message);
 
     const isSmtpError =
-      ["EAUTH", "ECONNECTION", "ETIMEDOUT", "EENVELOPE", "EMESSAGE"].includes(
-        err.code,
-      ) ||
+      [
+        "EAUTH",
+        "ECONNECTION",
+        "ETIMEDOUT",
+        "EENVELOPE",
+        "EMESSAGE",
+        "ESOCKET",
+      ].includes(err.code) ||
       (typeof err.responseCode === "number" && err.responseCode >= 400);
 
     if (isSmtpError) {
