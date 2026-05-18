@@ -345,7 +345,8 @@ async function updateStandings(match) {
       hP = 0;
     let aW = 0,
       aD = 0,
-      aP = 0;
+      aP = 0,
+      aL = 0;
     let hW_ot = 0,
       hL_ot = 0,
       aW_ot = 0,
