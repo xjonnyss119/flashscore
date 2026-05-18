@@ -84,7 +84,6 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// РОУТ СОЗДАНИЯ МАТЧА С АВТОМАТИЧЕСКОЙ ОЧИСТКОЙ ПОД ЛИМИТЫ NEON
 router.post("/", requireAdmin, async (req, res) => {
   try {
     const { home_team_id, away_team_id, league_id, start_time } = req.body;
@@ -98,33 +97,31 @@ router.post("/", requireAdmin, async (req, res) => {
     }
     const sportId = leagueRes.rows[0].sport_id;
 
-    // --- БЛОК КОНТРОЛЯ СТРОК В БД (Лимит 49 строк) ---
     const countRes = await pool.query("SELECT COUNT(*) FROM matches");
     const currentMatchesCount = parseInt(countRes.rows[0].count);
 
     if (currentMatchesCount >= 49) {
-      console.log(`[NEON GUARD] Обнаружено ${currentMatchesCount} матчей. Запуск чистки 10 старых игр...`);
-      
-      // Удаляем 10 самых старых ЗАВЕРШЕННЫХ матчей.
-      // Сортируем по start_time ASC (сначала самые ранние), чтобы не трогать свежие игры.
+      console.log(
+        `[NEON GUARD] Обнаружено ${currentMatchesCount} матчей. Запуск чистки 10 старых игр...`,
+      );
+
       await pool.query(`
         DELETE FROM matches 
         WHERE id IN (
           SELECT id FROM matches 
-          WHERE status = 'Finished' 
+          WHERE status = 'finished' 
           ORDER BY start_time ASC 
           LIMIT 10
         )
       `);
     }
-    // -------------------------------------------------
 
     const result = await pool.query(
       `INSERT INTO matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, is_overtime)
        VALUES ($1, $2, $3, $4, $5, 'scheduled', false) RETURNING *`,
       [home_team_id, away_team_id, league_id, sportId, start_time],
     );
-    res.status(201).json(result.rows[0]);
+    res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Ошибка сервера" });
@@ -169,6 +166,20 @@ router.delete("/:id", requireAdmin, async (req, res) => {
 router.post("/:id/events", requireAdmin, async (req, res) => {
   try {
     const { minute, type, team_id, player_name } = req.body;
+
+    const countRes = await pool.query("SELECT COUNT(*) FROM events");
+    if (parseInt(countRes.rows[0].count, 10) >= 49) {
+      await pool.query(`
+        DELETE FROM events 
+        WHERE id IN (
+          SELECT id FROM events 
+          WHERE match_id IN (SELECT id FROM matches WHERE status = 'finished')
+          ORDER BY id ASC 
+          LIMIT 30
+        )
+      `);
+    }
+
     const result = await pool.query(
       `INSERT INTO events (match_id, minute, type, team_id, player_name)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -176,6 +187,7 @@ router.post("/:id/events", requireAdmin, async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Ошибка сервера" });
   }
 });

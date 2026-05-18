@@ -82,7 +82,7 @@ function getEventSettings(sportId, ratingA, ratingB) {
       };
     case 3:
       return {
-        scoreProb: 1.35 * ratingModifier,
+        scoreProb: 1.75 * ratingModifier,
         scoreType: "basket",
         cardProb: 0.02,
         cardType: "foul",
@@ -345,7 +345,6 @@ async function updateStandings(match) {
       hP = 0;
     let aW = 0,
       aD = 0,
-      aL = 0,
       aP = 0;
     let hW_ot = 0,
       hL_ot = 0,

@@ -52,19 +52,19 @@ router.get("/favorites", requireAuth, async (req, res) => {
   }
 });
 
-// ДОБАВЛЕНИЕ В ИЗБРАННОЕ С ЗАЩИТОЙ ОТ ЛИМИТОВ NEON
 router.post("/favorites", requireAuth, async (req, res) => {
   try {
     const userId = req.session?.userId || req.user?.id;
     const { team_id, match_id } = req.body;
 
-    // --- БЛОК КОНТРОЛЯ СТРОК В FAVORITES ---
     const countRes = await pool.query("SELECT COUNT(*) FROM favorites");
     const currentCount = parseInt(countRes.rows[0].count);
 
     if (currentCount >= 49) {
-      console.log(`[NEON GUARD] В избранном ${currentCount} строк. Сносим 20 старых записей...`);
-      // Удаляем 20 самых старых записей из избранного
+      console.log(
+        `[NEON GUARD] В избранном ${currentCount} строк. Сносим 20 старых записей...`,
+      );
+
       await pool.query(`
         DELETE FROM favorites 
         WHERE id IN (
@@ -74,7 +74,6 @@ router.post("/favorites", requireAuth, async (req, res) => {
         )
       `);
     }
-    // ---------------------------------------
 
     const result = await pool.query(
       "INSERT INTO favorites (user_id, team_id, match_id) VALUES ($1, $2, $3) RETURNING *",
@@ -106,18 +105,18 @@ router.delete("/favorites/:id", requireAuth, async (req, res) => {
   }
 });
 
-// ПОЛУЧЕНИЕ УВЕДОМЛЕНИЙ С АВТО-ОЧИСТКОЙ СТАРЫХ НА ЛЕТУ
 router.get("/notifications", requireAuth, async (req, res) => {
   try {
     const userId = req.session?.userId || req.user?.id;
 
-    // --- БЛОК КОНТРОЛЯ СТРОК В NOTIFICATIONS ---
     const countRes = await pool.query("SELECT COUNT(*) FROM notifications");
     const currentCount = parseInt(countRes.rows[0].count);
 
     if (currentCount >= 49) {
-      console.log(`[NEON GUARD] В уведомлениях ${currentCount} строк. Удаляем 20 старых пушей...`);
-      // Вырезаем 20 самых старых уведомлений по дате создания
+      console.log(
+        `[NEON GUARD] В уведомлениях ${currentCount} строк. Удаляем 20 старых пушей...`,
+      );
+
       await pool.query(`
         DELETE FROM notifications 
         WHERE id IN (
@@ -127,7 +126,6 @@ router.get("/notifications", requireAuth, async (req, res) => {
         )
       `);
     }
-    // --------------------------------------------
 
     const result = await pool.query(
       `SELECT 
@@ -187,18 +185,18 @@ router.patch("/notifications/:id/read", requireAuth, async (req, res) => {
   }
 });
 
-// ПОЛУЧЕНИЕ ИСТОРИИ (С ОЧИСТКОЙ СТАРЫХ ЗАПИСЕЙ, ТАК КАК ТУТ ИДЁТ ИНСЕРТ В ДРУГОМ ФАЙЛЕ)
 router.get("/history", requireAuth, async (req, res) => {
   try {
     const userId = req.session?.userId || req.user?.id;
 
-    // --- БЛОК КОНТРОЛЯ СТРОК В HISTORY ---
     const countRes = await pool.query("SELECT COUNT(*) FROM history");
     const currentCount = parseInt(countRes.rows[0].count);
 
     if (currentCount >= 49) {
-      console.log(`[NEON GUARD] В истории ${currentCount} строк. Чистим 20 старых просмотров...`);
-      // Вычищаем 20 самых старых просмотров матчей из логов
+      console.log(
+        `[NEON GUARD] В истории ${currentCount} строк. Чистим 20 старых просмотров...`,
+      );
+
       await pool.query(`
         DELETE FROM history 
         WHERE id IN (
@@ -208,7 +206,6 @@ router.get("/history", requireAuth, async (req, res) => {
         )
       `);
     }
-    // -------------------------------------
 
     const result = await pool.query(
       `SELECT 
