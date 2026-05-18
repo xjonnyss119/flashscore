@@ -6,9 +6,9 @@ const pool = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === "true",
+  host: "64.233.165.108",
+  port: Number(process.env.SMTP_PORT) || 465,
+  secure: true,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -16,9 +16,6 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 10000,
-  dns: {
-    family: 4,
-  },
 });
 
 function generateCode() {
