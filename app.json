@@ -1,8 +1,33 @@
 {
   "expo": {
+    "name": "FlashScore",
+    "slug": "sports-sim-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "assets/splash-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.xjonnys.sportssim"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "assets/icon.png",
+        "backgroundColor": "#121212"
+      },
+      "package": "com.xjonnys.sportssim"
+    },
+    "web": {
+      "favicon": "assets/favicon.png"
+    },
     "extra": {
       "eas": {
-        "projectId": "d63cd80e-d495-4d56-a507-f65c7bd67213"
+        "projectId": "304cd081-c423-4e1a-97bb-601bf7a053f6"
       }
     }
   }

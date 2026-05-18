@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "bcrypt": "^6.0.0"
+    "bcrypt": "^6.0.0",
+    "expo": "^55.0.24"
   }
 }
