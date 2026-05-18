@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
+const nodemailer = require("nodemailer"); 
 const pool = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
 
@@ -8,47 +9,39 @@ function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST, 
+  port: Number(process.env.SMTP_PORT) || 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_USER, 
+    pass: process.env.SMTP_PASS, 
+  },
+  tls: {
+    rejectUnauthorized: false,
+  },
+});
+
 async function sendVerificationEmail(toEmail, code) {
-  const apiKey = process.env.UNISENDER_API_KEY;
-  const senderEmail = "ivanzuk36@gmail.com";
-  const senderName = "Flashscore";
-
-  const bodyHtml = `
-    <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
-      <h2>Подтвердите ваш email</h2>
-      <p>Ваш код подтверждения:</p>
-      <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px;
-                  padding: 16px; background: #f5f5f5; text-align: center;
-                  border-radius: 8px; margin: 16px 0;">
-        ${code}
+  const mailOptions = {
+    from: `"Flashscore App" <${process.env.SMTP_USER}>`,
+    to: toEmail,
+    subject: "Подтверждение регистрации",
+    html: `
+      <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
+        <h2>Подтвердите ваш email</h2>
+        <p>Ваш код подтверждения:</p>
+        <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px;
+                    padding: 16px; background: #f5f5f5; text-align: center;
+                    border-radius: 8px; margin: 16px 0;">
+          ${code}
+        </div>
+        <p style="color: #888; font-size: 14px;">Код действителен 24 часа.</p>
       </div>
-      <p style="color: #888; font-size: 14px;">Код действителен 24 часа.</p>
-    </div>
-  `;
+    `,
+  };
 
-  const params = new URLSearchParams();
-  params.append("format", "json");
-  params.append("api_key", apiKey);
-  params.append("email", toEmail);
-  params.append("sender_name", senderName);
-  params.append("sender_email", senderEmail);
-  params.append("subject", "Подтверждение регистрации");
-  params.append("body", bodyHtml);
-  params.append("list_id", "1");
-
-  const response = await fetch("https://api.unisender.com/ru/api/sendEmail", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: params.toString(),
-  });
-
-  const result = await response.json();
-
-  if (!response.ok || result.error) {
-    throw new Error(`Unisender Error: ${result.error || "Unknown error"}`);
-  }
+  await transporter.sendMail(mailOptions);
 }
 
 router.post("/register", async (req, res) => {
