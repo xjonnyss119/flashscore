@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE_URL = "http://10.253.240.197:3000/api"
+const BASE_URL = " https://flashscore-backend-r1js.onrender.com/api"
 
 const api = axios.create({
   baseURL: BASE_URL,
