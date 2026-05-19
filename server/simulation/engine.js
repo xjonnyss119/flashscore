@@ -376,6 +376,8 @@ async function updateStandings(match) {
 
 async function runSimulationTick() {
   try {
+    console.log("[SIM] Tick started");
+
     // 1. Запускаем новые сезоны по таймеру
     const countdownSeasons = await pool.query(
       "SELECT league_id FROM seasons WHERE status = 'countdown' AND next_season_at <= NOW()"
@@ -404,27 +406,30 @@ async function runSimulationTick() {
         if (r.status === "scheduled") sched = parseInt(r.count, 10);
       });
 
-      if (live + sched < 3 && Math.random() < 0.6) {
+      console.log(`[SIM] League ${leagueId}: live=${live} sched=${sched}`);
+
+      // Создаём новый матч если суммарно меньше 2 (было 3, снижено чтобы не блокировать)
+      if (live + sched < 2) {
         await generateRoundRobinMatch(leagueId, sportId);
       }
 
+      // Запускаем все просроченные scheduled матчи
       const ready = await pool.query(
         "SELECT id FROM matches WHERE league_id = $1 AND status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
         [leagueId]
       );
+      console.log(`[SIM] League ${leagueId}: ${ready.rows.length} matches ready to go live`);
       for (const m of ready.rows) {
-        const total = live + sched;
-        if (total === 0 || (live + 1) / total <= 0.7) {
-          await pool.query("UPDATE matches SET status = 'live', updated_at = NOW() WHERE id = $1", [m.id]);
-          live++; sched--;
-        } else {
-          await pool.query("UPDATE matches SET start_time = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1", [m.id]);
-        }
+        await pool.query("UPDATE matches SET status = 'live', updated_at = NOW() WHERE id = $1", [m.id]);
+        live++;
+        sched--;
+        console.log(`[SIM] Match ${m.id} → live`);
       }
     }
 
     // 3. Тикаем live матчи
     const liveMatches = await pool.query("SELECT * FROM matches WHERE status = 'live'");
+    console.log(`[SIM] Ticking ${liveMatches.rows.length} live matches`);
     for (const match of liveMatches.rows) {
       await tickMatch(match);
     }
@@ -436,6 +441,7 @@ async function runSimulationTick() {
     }
   } catch (err) {
     console.error("[SIM] Tick error:", err.message);
+    console.error(err.stack);
   }
 }
 
