@@ -150,7 +150,7 @@ router.post("/ai-prediction", async (req, res) => {
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
     // ИСПРАВЛЕНО: Стабильный метод инициализации клиента GoogleGenAI
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const ai = new GoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY });
 
     // ИСПРАВЛЕНО: Получаем модель стандартным методом get()
     const model = ai.models.get("gemini-1.5-flash");
