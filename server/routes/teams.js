@@ -6,7 +6,7 @@ const { requireAdmin } = require("../middleware/auth");
 // Подключаем официальный пакет Google AI
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Инициализируем клиент один раз глобально (передаем ключ напрямую в конструктор)
+// Инициализируем клиент (ключ подтягивается из .env)
 const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 router.get("/", async (req, res) => {
@@ -40,7 +40,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// РОУТ ДЛЯ ИИ-ПРОГНОЗА (ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ)
+// РОУТ ДЛЯ ИИ-ПРОГНОЗА (АКТУАЛЬНАЯ ВЕРСИЯ GEMINI)
 router.post("/ai-prediction", async (req, res) => {
   try {
     const sportId = parseInt(req.query.sportId) || 1;
@@ -135,7 +135,7 @@ router.post("/ai-prediction", async (req, res) => {
     const sportNames = { 1: "Футбольной", 2: "Хоккейной", 3: "Баскетбольной" };
     const currentSportName = sportNames[sportId] || "Спортивной";
 
-    // Наш промпт для ИИ эксперта
+    // Промпт переносим в системные инструкции модели
     const systemPrompt = `Ты — топовый, харизматичный спортивный аналитик и эксперт. 
     Тебе предоставлена итоговая таблица ${currentSportName} лиги, полученная в результате математической симуляции оставшихся матчей сезона.
     Твоя задача — написать яркий, экспертный разбор итогов. Назови чемпиона, выдели главные сенсации (кто прыгнул выше головы) и главные провалы сезона. 
@@ -149,26 +149,26 @@ router.post("/ai-prediction", async (req, res) => {
 
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
-    // ИСПРАВЛЕНО: Получаем модель через железно поддерживаемый метод getGenerativeModel
-    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    // Вызываем генерацию контента
-    const response = await model.generateContent({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: `${systemPrompt}\n\nДанные таблицы:\n${userContent}` },
-          ],
-        },
-      ],
+    const model = ai.getGenerativeModel({
+      model: "gemini-2.5-flash",
+      systemInstruction: systemPrompt,
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.6,
       },
     });
 
-    // Извлекаем чистый текст из ответа (библиотека сама отдает строку)
+    // Отправляем только данные таблицы
+    const response = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userContent }],
+        },
+      ],
+    });
+
+    // Извлекаем чистый текст ответа
     const textResponse = response.response.text();
 
     // Парсим в JSON объект и отправляем на фронтенд
