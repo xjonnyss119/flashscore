@@ -1,27 +1,29 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
+const axios = require("axios");
 
 const GEMINI_API_KEY = "AIzaSyD5lld7kwBKrirnwivZMDyTQWk504yd7FA";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 async function callGemini(prompt) {
-  const response = await fetch(GEMINI_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await axios.post(
+    GEMINI_URL,
+    {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 512 }
-    })
-  });
+    },
+    {
+      headers: { "Content-Type": "application/json" },
+      validateStatus: (status) => status < 500
+    }
+  );
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini API error: ${response.status} ${err}`);
+  if (response.status >= 400) {
+    throw new Error(`Gemini API error: ${response.status} ${JSON.stringify(response.data)}`);
   }
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   return text.trim();
 }
 
@@ -125,7 +127,6 @@ ${standingsText}
 
     const geminiResponse = await callGemini(prompt);
 
-    // Парсим JSON из ответа
     let prediction;
     try {
       const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/);
@@ -139,7 +140,6 @@ ${standingsText}
       };
     }
 
-    // Сохраняем в кэш
     await pool.query(`
       INSERT INTO seasons (league_id, ai_prediction, ai_prediction_updated)
       VALUES ($1, $2, NOW())
@@ -155,8 +155,6 @@ ${standingsText}
   }
 });
 
-// POST /api/ai/prediction/:leagueId/refresh
-// Принудительно обновляет прогноз (сбрасывает кэш)
 router.post("/prediction/:leagueId/refresh", async (req, res) => {
   const leagueId = parseInt(req.params.leagueId, 10);
   if (isNaN(leagueId)) return res.status(400).json({ error: "Неверный ID лиги" });
