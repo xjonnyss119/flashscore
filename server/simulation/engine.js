@@ -91,6 +91,7 @@ async function getNextRoundRobinPair(leagueId, sportId) {
 async function generateRoundRobinMatch(leagueId, sportId) {
   try {
     const pair = await getNextRoundRobinPair(leagueId, sportId);
+    console.log(`[SIM] League ${leagueId}: generateRoundRobinMatch pair=`, pair ? (pair.seasonComplete ? 'seasonComplete' : `${pair.home?.id} vs ${pair.away?.id}`) : 'null');
     if (!pair) return;
     if (pair.seasonComplete) {
       await handleSeasonComplete(leagueId, sportId);
