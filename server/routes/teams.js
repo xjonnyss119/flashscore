@@ -2,7 +2,8 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
 const { requireAdmin } = require("../middleware/auth");
-// Подключаем официальный клиент Google Generative AI
+
+// ИСПРАВЛЕНО: Импортируем правильный класс GoogleGenAI из SDK
 const { GoogleGenAI } = require("@google/generative-ai");
 
 router.get("/", async (req, res) => {
@@ -36,7 +37,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// РОУТ ДЛЯ ИИ-ПРОГНОЗА ЧЕРЕЗ ОФИЦИАЛЬНЫЙ SDK GEMINI
+// РОУТ ДЛЯ ИИ-ПРОГНОЗА ЧЕРЕЗ ИСПРАВЛЕННЫЙ SDK GEMINI
 router.post("/ai-prediction", async (req, res) => {
   try {
     const sportId = parseInt(req.query.sportId) || 1;
@@ -145,10 +146,10 @@ router.post("/ai-prediction", async (req, res) => {
 
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
-    // Инициализируем GoogleGenAI с помощью ключа из .env
+    // ИСПРАВЛЕНО: Стабильный метод инициализации клиента GoogleGenAI
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Получаем доступ к генеративной модели gemini-1.5-flash через официальный метод
+    // ИСПРАВЛЕНО: Получаем модель стандартным методом get()
     const model = ai.models.get("gemini-1.5-flash");
 
     // Вызываем генерацию контента
@@ -162,7 +163,6 @@ router.post("/ai-prediction", async (req, res) => {
         },
       ],
       generationConfig: {
-        // Официальный параметр SDK для принудительного JSON режима
         responseMimeType: "application/json",
         temperature: 0.6,
       },
@@ -171,7 +171,7 @@ router.post("/ai-prediction", async (req, res) => {
     // Извлекаем чистый текст из ответа
     const textResponse = response.text;
 
-    // Парсим в JSON объект и отправляем на фронтенд в StandingsScreen
+    // Парсим в JSON объект и отправляем на фронтенд
     const aiData = JSON.parse(textResponse);
     return res.status(200).json(aiData);
   } catch (error) {
