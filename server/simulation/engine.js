@@ -17,53 +17,114 @@ function randomPlayer() {
   return PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
 }
 
+// -------------------------------------------------------------------------
+// ЧИСТЫЙ АЛГОРИТМ ROUND-ROBIN ДЛЯ ОПРЕДЕЛЕНИЯ ПАР НА ТЕКУЩИЙ ТУР
+// -------------------------------------------------------------------------
+function getRoundRobinMatchesForTour(teams, totalCircles, targetRoundIdx) {
+  let rotation = teams.map((t) => ({ id: t.id }));
+
+  // Если нечетно, добавляем фантомную команду для отдыха
+  if (rotation.length % 2 !== 0) {
+    rotation.push({ id: null });
+  }
+
+  const numTeams = rotation.length;
+  const roundsInCircle = numTeams - 1;
+  let singleCircleRounds = [];
+
+  for (let round = 0; round < roundsInCircle; round++) {
+    let roundMatches = [];
+    for (let i = 0; i < numTeams / 2; i++) {
+      const home = rotation[i];
+      const away = rotation[numTeams - 1 - i];
+      if (home.id !== null && away.id !== null) {
+        roundMatches.push({ homeId: home.id, awayId: away.id });
+      }
+    }
+    singleCircleRounds.push(roundMatches);
+    rotation.splice(1, 0, rotation.pop());
+  }
+
+  // Дублируем круги с чередованием полей
+  let fullSeasonRounds = [];
+  for (let c = 1; c <= totalCircles; c++) {
+    singleCircleRounds.forEach((roundMatches) => {
+      let matches = roundMatches.map((m) =>
+        c % 2 !== 0 ? { ...m } : { homeId: m.awayId, awayId: m.homeId },
+      );
+      fullSeasonRounds.push(matches);
+    });
+  }
+
+  return fullSeasonRounds[targetRoundIdx] || null;
+}
+
+// -------------------------------------------------------------------------
+// МОДЕРНИЗИРОВАННАЯ ГЕНЕРАЦИЯ МАТЧЕЙ ПО ТУРАМ
+// -------------------------------------------------------------------------
 async function generateRandomMatch(status = "scheduled") {
   try {
+    // Выбираем случайную лигу, которая сейчас ACTIVE (не на перерыве)
     const leagueRes = await pool.query(`
-      SELECT l.id, l.sport_id 
-      FROM leagues l
-      JOIN sports s ON l.sport_id = s.id
-      ORDER BY RANDOM() 
-      LIMIT 1
+      SELECT l.id, l.sport_id, ls.current_round, ls.total_rounds
+      FROM public.leagues l
+      JOIN public.league_states ls ON l.id = ls.league_id
+      WHERE ls.status = 'active'
+      ORDER BY RANDOM() LIMIT 1
     `);
 
     if (leagueRes.rows.length === 0) return;
-    const { id: leagueId, sport_id: sportId } = leagueRes.rows[0];
+    const {
+      id: leagueId,
+      sport_id: sportId,
+      current_round: currentRound,
+      total_rounds: totalRounds,
+    } = leagueRes.rows[0];
 
-    const teamsRes = await pool.query(
-      `
-      SELECT id, rating FROM teams 
-      WHERE league_id = $1 
-      AND id NOT IN (
-          SELECT home_team_id FROM matches WHERE status IN ('scheduled', 'live')
-          UNION
-          SELECT away_team_id FROM matches WHERE status IN ('scheduled', 'live')
-      )
-      ORDER BY RANDOM() 
-      LIMIT 2
-    `,
+    // Проверяем, генерируются ли уже матчи этого тура (чтобы не дублировать)
+    const existingMatches = await pool.query(
+      "SELECT COUNT(*) FROM public.matches WHERE league_id = $1 AND status IN ('scheduled', 'live')",
       [leagueId],
     );
+    if (parseInt(existingMatches.rows[0].count, 10) > 0) return; // Тур уже играется или запланирован
 
-    if (teamsRes.rows.length < 2) return;
-
-    const teamA = teamsRes.rows[0];
-    const teamB = teamsRes.rows[1];
-
-    const delayMinutes =
-      status === "live" ? 0 : Math.floor(Math.random() * 11) + 5;
-    const startTime = new Date(Date.now() + delayMinutes * 60 * 1000);
-
-    await pool.query(
-      `INSERT INTO matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, home_score, away_score, minute, updated_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0, NOW())`,
-      [teamA.id, teamB.id, leagueId, sportId, startTime, status],
+    // Тянем все команды лиги, отсортированные по ID (важно для стабильности круговой сетки)
+    const teamsRes = await pool.query(
+      "SELECT id FROM public.teams WHERE league_id = $1 ORDER BY id ASC",
+      [leagueId],
     );
+    const teams = teamsRes.rows;
+    if (teams.length < 2) return;
+
+    const totalCircles = sportId === 1 ? 2 : 4;
+
+    // Получаем пары именно для текущего тура из состояния БД
+    const currentTourMatches = getRoundRobinMatchesForTour(
+      teams,
+      totalCircles,
+      currentRound,
+    );
+    if (!currentTourMatches || currentTourMatches.length === 0) return;
+
+    await pool.query("BEGIN");
+    for (let pair of currentTourMatches) {
+      const delayMinutes =
+        status === "live" ? 0 : Math.floor(Math.random() * 5) + 2;
+      const startTime = new Date(Date.now() + delayMinutes * 60 * 1000);
+
+      await pool.query(
+        `INSERT INTO public.matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, home_score, away_score, minute, updated_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0, NOW())`,
+        [pair.homeId, pair.awayId, leagueId, sportId, startTime, status],
+      );
+    }
+    await pool.query("COMMIT");
 
     console.log(
-      `[SIM][МАТЕМАТИКА] Сгенерирован матч [Статус: ${status.toUpperCase()}] (Спорт ID: ${sportId}): Команда ${teamA.id} vs ${teamB.id}`,
+      `[SIM] Сгенерирован Тур №${currentRound + 1} для Лиги ID ${leagueId} (${currentTourMatches.length} матчей)`,
     );
   } catch (err) {
+    await pool.query("ROLLBACK").catch(() => {});
     console.error("[SIM] Generation error:", err.message);
   }
 }
@@ -117,7 +178,7 @@ async function tickMatch(match) {
           ? match.home_team_id
           : match.away_team_id;
         await pool.query(
-          "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1, $2, 'puck', $3, 'Победный буллит')",
+          "INSERT INTO public.events (match_id, minute, type, team_id, player_name) VALUES ($1, $2, 'puck', $3, 'Победный буллит')",
           [match.id, regularMaxMinutes + 20, winnerTeamId],
         );
 
@@ -146,7 +207,7 @@ async function tickMatch(match) {
           return;
         }
         await pool.query(
-          "INSERT INTO events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система (2-й ОТ или далее)')",
+          "INSERT INTO public.events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система (2-й ОТ или далее)')",
           [match.id, newMinute],
         );
       }
@@ -158,7 +219,7 @@ async function tickMatch(match) {
     ) {
       isOvertime = true;
       await pool.query(
-        "INSERT INTO events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система')",
+        "INSERT INTO public.events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система')",
         [match.id, regularMaxMinutes],
       );
     } else {
@@ -174,12 +235,12 @@ async function tickMatch(match) {
   }
 
   await pool.query(
-    "UPDATE matches SET minute = $1, is_overtime = $2, updated_at = NOW() WHERE id = $3",
+    "UPDATE public.matches SET minute = $1, is_overtime = $2, updated_at = NOW() WHERE id = $3",
     [newMinute, isOvertime, match.id],
   );
 
   const teamsRes = await pool.query(
-    "SELECT id, name, rating FROM teams WHERE id IN ($1, $2)",
+    "SELECT id, name, rating FROM public.teams WHERE id IN ($1, $2)",
     [match.home_team_id, match.away_team_id],
   );
   const hT = teamsRes.rows.find((t) => t.id === match.home_team_id);
@@ -190,7 +251,6 @@ async function tickMatch(match) {
     hT?.rating || 50,
     aT?.rating || 50,
   );
-
   const homeTeamName = hT?.name || "Хозяева";
   const awayTeamName = aT?.name || "Гости";
 
@@ -219,11 +279,11 @@ async function tickMatch(match) {
     const scoringTeam = side === "home" ? homeTeamName : awayTeamName;
 
     await pool.query(
-      `UPDATE matches SET ${side}_score = ${side}_score + $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE public.matches SET ${side}_score = ${side}_score + $1, updated_at = NOW() WHERE id = $2`,
       [points, match.id],
     );
     await pool.query(
-      "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
+      "INSERT INTO public.events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
       [
         match.id,
         newMinute,
@@ -255,7 +315,7 @@ async function tickMatch(match) {
     const penalizedTeam = side === "home" ? homeTeamName : awayTeamName;
 
     await pool.query(
-      "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
+      "INSERT INTO public.events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
       [match.id, newMinute, settings.cardType, teamId, randomPlayer()],
     );
 
@@ -269,6 +329,9 @@ async function tickMatch(match) {
   }
 }
 
+// -------------------------------------------------------------------------
+// ЗАВЕРШЕНИЕ МАТЧА И АВТОМАТИЧЕСКИЙ ПЕРЕХОД ПО ТУРАМ / СЕЗОНАМ
+// -------------------------------------------------------------------------
 async function finishAndAddToStandings(
   match,
   finalMinute,
@@ -276,43 +339,103 @@ async function finishAndAddToStandings(
   awayScore,
   isOvertime,
 ) {
-  await pool.query(
-    "UPDATE matches SET status = 'finished', minute = $1, home_score = $2, away_score = $3, is_overtime = $4, updated_at = NOW() WHERE id = $5",
-    [finalMinute, homeScore, awayScore, isOvertime, match.id],
-  );
+  try {
+    await pool.query("BEGIN");
 
-  const finalMatchData = {
-    ...match,
-    home_score: homeScore,
-    away_score: awayScore,
-    is_overtime: isOvertime,
-  };
+    await pool.query(
+      "UPDATE public.matches SET status = 'finished', minute = $1, home_score = $2, away_score = $3, is_overtime = $4, updated_at = NOW() WHERE id = $5",
+      [finalMinute, homeScore, awayScore, isOvertime, match.id],
+    );
 
-  await updateStandings(finalMatchData);
+    const finalMatchData = {
+      ...match,
+      home_score: homeScore,
+      away_score: awayScore,
+      is_overtime: isOvertime,
+    };
+    await updateStandings(finalMatchData);
 
-  const countRes = await pool.query("SELECT COUNT(*) FROM matches");
-  if (parseInt(countRes.rows[0].count, 10) >= 49) {
-    await pool.query(`
-      DELETE FROM matches 
-      WHERE id IN (
-        SELECT id FROM matches 
-        WHERE status = 'finished' 
-        ORDER BY updated_at ASC 
-        LIMIT 20
-      )
-    `);
+    await pool.query("COMMIT");
+
+    // Очистка старых матчей из твоей старой логики
+    const countRes = await pool.query("SELECT COUNT(*) FROM public.matches");
+    if (parseInt(countRes.rows[0].count, 10) >= 100) {
+      // Чуть увеличим лимит, чтобы туры помещались
+      await pool.query(`
+        DELETE FROM public.matches WHERE id IN (
+          SELECT id FROM public.matches WHERE status = 'finished' ORDER BY updated_at ASC LIMIT 10
+        )
+      `);
+    }
+
+    // ПРОВЕРКА: Завершился ли ВЕСЬ текущий тур в этой конкретной лиге?
+    const activeMatchesInLeague = await pool.query(
+      "SELECT COUNT(*) FROM public.matches WHERE league_id = $1 AND status IN ('scheduled', 'live')",
+      [match.league_id],
+    );
+
+    if (parseInt(activeMatchesInLeague.rows[0].count, 10) === 0) {
+      // Все матчи тура доиграны! Переключаем состояние лиги
+      const stateRes = await pool.query(
+        "SELECT current_round, total_rounds, sport_id FROM public.league_states ls JOIN public.leagues l ON ls.league_id = l.id WHERE ls.league_id = $1",
+        [match.league_id],
+      );
+      const { current_round, total_rounds, sport_id } = stateRes.rows[0];
+      const nextRound = current_round + 1;
+
+      if (nextRound >= total_rounds && total_rounds > 0) {
+        // ПУНКТ 4: КОНЕЦ СЕЗОНА! Определяем чемпиона лиги из public.standings
+        const championRes = await pool.query(
+          `
+          SELECT t.name FROM public.standings s
+          JOIN public.teams t ON s.team_id = t.id
+          WHERE s.league_id = $1
+          ORDER BY s.points DESC, (s.goals_for - s.goals_against) DESC, t.name ASC LIMIT 1
+        `,
+          [match.league_id],
+        );
+
+        const finalChampion = championRes.rows[0]?.name || "Не определен";
+        const breakEndTime = new Date(Date.now() + 2 * 60 * 1000); // 2 минуты перерыва
+
+        await pool.query(
+          `
+          UPDATE public.league_states 
+          SET current_round = $1, status = 'break', next_season_start = $2, last_champion = $3
+          WHERE league_id = $4
+        `,
+          [nextRound, breakEndTime, finalChampion, match.league_id],
+        );
+
+        console.log(
+          `[СЕЗОН ОКОНЧЕН] Лига ID ${match.league_id}. Действующий чемпион: ${finalChampion}. Перерыв 2 минуты.`,
+        );
+      } else {
+        // Просто шагаем на следующий тур
+        await pool.query(
+          "UPDATE public.league_states SET current_round = $1 WHERE league_id = $2",
+          [nextRound, match.league_id],
+        );
+        console.log(
+          `[ТУР ЗАВЕРШЕН] Лига ID ${match.league_id} переходит на Тур №${nextRound + 1}`,
+        );
+      }
+    }
+  } catch (err) {
+    await pool.query("ROLLBACK").catch(() => {});
+    console.error("[SIM] Error during finishing match:", err.message);
   }
 }
 
 async function notifyFavoriteUsers(matchId, eventType, message) {
   try {
     const favs = await pool.query(
-      "SELECT user_id FROM favorites WHERE match_id = $1",
+      "SELECT user_id FROM public.favorites WHERE match_id = $1",
       [matchId],
     );
     for (const fav of favs.rows) {
       await pool.query(
-        "INSERT INTO notifications (user_id, match_id, type, message) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO public.notifications (user_id, match_id, type, message) VALUES ($1, $2, $3, $4)",
         [fav.user_id, matchId, eventType, message],
       );
     }
@@ -333,7 +456,7 @@ async function updateStandings(match) {
     } = match;
 
     const leagueRes = await pool.query(
-      "SELECT sport_id FROM leagues WHERE id = $1",
+      "SELECT sport_id FROM public.leagues WHERE id = $1",
       [league_id],
     );
     if (leagueRes.rows.length === 0) return;
@@ -399,18 +522,12 @@ async function updateStandings(match) {
 
     const upsert = async (tId, w, d, l, p, gf, ga, w_ot, l_ot) => {
       await pool.query(
-        `INSERT INTO standings (team_id, league_id, played, wins, draws, losses, points, goals_for, goals_against, wins_ot, losses_ot)
+        `INSERT INTO public.standings (team_id, league_id, played, wins, draws, losses, points, goals_for, goals_against, wins_ot, losses_ot)
          VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (team_id, league_id) DO UPDATE SET
-           played = standings.played + 1, 
-           wins = standings.wins + $3, 
-           draws = standings.draws + $4,
-           losses = standings.losses + $5, 
-           points = standings.points + $6,
-           goals_for = standings.goals_for + $7, 
-           goals_against = standings.goals_against + $8,
-           wins_ot = COALESCE(standings.wins_ot, 0) + $9,
-           losses_ot = COALESCE(standings.losses_ot, 0) + $10`,
+           played = standings.played + 1, wins = standings.wins + $3, draws = standings.draws + $4,
+           losses = standings.losses + $5, points = standings.points + $6, goals_for = standings.goals_for + $7, 
+           goals_against = standings.goals_against + $8, wins_ot = COALESCE(standings.wins_ot, 0) + $9, losses_ot = COALESCE(standings.losses_ot, 0) + $10`,
         [tId, league_id, w, d, l, p, gf, ga, w_ot, l_ot],
       );
     };
@@ -442,18 +559,53 @@ async function updateStandings(match) {
   }
 }
 
+// -------------------------------------------------------------------------
+// ОСНОВНОЙ СИСТЕМНЫЙ ТИК ДВИЖКА (ВЫЗЫВАЕТСЯ РАЗ В 10 СЕКУНД)
+// -------------------------------------------------------------------------
 async function runSimulationTick() {
   try {
+    // ПУНКТ 4: Проверяем лиги со статусом 'break' на окончание таймера межсезонья
+    const breakingLeagues = await pool.query(
+      "SELECT league_id, sport_id, next_season_start FROM public.league_states WHERE status = 'break'",
+    );
+    for (let bl of breakingLeagues.rows) {
+      if (new Date() >= new Date(bl.next_season_start)) {
+        console.log(
+          `[ТАЙМЕР ИСТЕК] Обнуление лиги ID ${bl.league_id}. Старт нового сезона.`,
+        );
+
+        await pool.query("BEGIN");
+        // Сбрасываем очки в ноль
+        await pool.query(
+          "UPDATE public.standings SET played=0, wins=0, draws=0, losses=0, points=0, goals_for=0, goals_against=0, wins_ot=0, losses_ot=0 WHERE league_id = $1",
+          [bl.league_id],
+        );
+
+        // Пересчитываем общее число раундов для нового круга
+        const teamsCount = await pool.query(
+          "SELECT COUNT(*) FROM public.teams WHERE league_id = $1",
+          [bl.league_id],
+        );
+        const n = parseInt(teamsCount.rows[0].count, 10);
+        const totalCircles = bl.sport_id === 1 ? 2 : 4;
+        const totalRounds = (n % 2 === 0 ? n - 1 : n) * totalCircles;
+
+        await pool.query(
+          "UPDATE public.league_states SET current_round = 0, total_rounds = $1, status = 'active', next_season_start = NULL WHERE league_id = $2",
+          [totalRounds, bl.league_id],
+        );
+        await pool.query("COMMIT");
+      }
+    }
+
+    // Анализ текущих активных матчей в live/scheduled
     const statsRes = await pool.query(`
-      SELECT status, COUNT(*) as count 
-      FROM matches 
-      WHERE status IN ('live', 'scheduled') 
-      GROUP BY status
+      SELECT status, COUNT(*) as count FROM public.matches 
+      WHERE status IN ('live', 'scheduled') GROUP BY status
     `);
 
     let currentLive = 0;
     let currentScheduled = 0;
-
     statsRes.rows.forEach((row) => {
       if (row.status === "live") currentLive = parseInt(row.count, 10);
       if (row.status === "scheduled")
@@ -462,28 +614,14 @@ async function runSimulationTick() {
 
     const activeTotal = currentLive + currentScheduled;
 
-    if (activeTotal < 25) {
-      if (Math.random() < 0.5) {
-        const nextTotal = activeTotal + 1;
-
-        const currentLiveRatio = nextTotal > 0 ? currentLive / nextTotal : 0;
-
-        let targetStatus = "scheduled";
-
-        if (currentLiveRatio < 0.3) {
-          targetStatus = "live";
-        } else if ((currentLive + 1) / nextTotal <= 0.7) {
-          targetStatus = Math.random() < 0.4 ? "live" : "scheduled";
-        } else {
-          targetStatus = "scheduled";
-        }
-
-        await generateRandomMatch(targetStatus);
-      }
+    // Генерируем матчи очередного тура, если текущие пустые
+    if (activeTotal === 0) {
+      await generateRandomMatch("scheduled");
     }
 
+    // Переводим матчи из scheduled в live, когда пришло время
     const readyToLiveRes = await pool.query(
-      "SELECT id FROM matches WHERE status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
+      "SELECT id FROM public.matches WHERE status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
     );
 
     let tempLiveCount = currentLive;
@@ -496,24 +634,22 @@ async function runSimulationTick() {
 
       if (futureLiveRatio <= 0.7) {
         await pool.query(
-          "UPDATE matches SET status = 'live', updated_at = NOW() WHERE id = $1",
+          "UPDATE public.matches SET status = 'live', updated_at = NOW() WHERE id = $1",
           [matchRow.id],
         );
         tempLiveCount++;
         tempScheduledCount--;
       } else {
         await pool.query(
-          "UPDATE matches SET start_time = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1",
+          "UPDATE public.matches SET start_time = NOW() + INTERVAL '1 minute', updated_at = NOW() WHERE id = $1",
           [matchRow.id],
-        );
-        console.log(
-          `[SIM][ЗАЩИТА] Старт матча ID ${matchRow.id} отложен на 2 мин: превышен лимит LIVE (70%)`,
         );
       }
     }
 
+    // Прокатываем минуту (tick) для всех LIVE-матчей
     const liveMatches = await pool.query(
-      "SELECT * FROM matches WHERE status = 'live'",
+      "SELECT * FROM public.matches WHERE status = 'live'",
     );
     for (const match of liveMatches.rows) {
       await tickMatch(match);
@@ -523,11 +659,8 @@ async function runSimulationTick() {
   }
 }
 
-
 function runAiPredictEngine(teamsFromDb, sportId) {
   let rotation = [...teamsFromDb];
-  
-  // Добавляем заглушку, если число команд нечётное
   if (rotation.length % 2 !== 0) {
     rotation.push({ id: null, name: "Bye", rating: 0, points: 0 });
   }
@@ -536,55 +669,61 @@ function runAiPredictEngine(teamsFromDb, sportId) {
   const rounds = numTeams - 1;
   let firstCircle = [];
 
-  // Генерация кругов по системе Round-Robin (каждый с каждым)
   for (let round = 0; round < rounds; round++) {
     for (let i = 0; i < numTeams / 2; i++) {
       const home = rotation[i];
       const away = rotation[numTeams - 1 - i];
       if (home.id !== null && away.id !== null) {
-        firstCircle.push({ homeId: home.id, homeName: home.name, awayId: away.id, awayName: away.name });
+        firstCircle.push({
+          homeId: home.id,
+          homeName: home.name,
+          awayId: away.id,
+          awayName: away.name,
+        });
       }
     }
     rotation.splice(1, 0, rotation.pop());
   }
 
-  // Второй круг чемпионата (смена сторон)
-  let secondCircle = firstCircle.map(m => ({ homeId: m.awayId, homeName: m.awayName, awayId: m.homeId, awayName: m.homeName }));
+  let secondCircle = firstCircle.map((m) => ({
+    homeId: m.awayId,
+    homeName: m.awayName,
+    awayId: m.homeId,
+    awayName: m.homeName,
+  }));
   const fullCalendar = [...firstCircle, ...secondCircle];
 
-  // Создаем таблицу результатов в оперативной памяти бэкенда
-  let simulatedTable = teamsFromDb.map(t => ({
+  let simulatedTable = teamsFromDb.map((t) => ({
     id: t.id,
     name: t.name,
     points: parseInt(t.points) || 0,
-    rating: parseInt(t.rating) || 50
+    rating: parseInt(t.rating) || 50,
   }));
 
-  // Пробегаемся по матчам в памяти и симулируем исходы с весами рейтинга
-  fullCalendar.forEach(match => {
-    const home = simulatedTable.find(t => t.id === match.homeId);
-    const away = simulatedTable.find(t => t.id === match.awayId);
+  fullCalendar.forEach((match) => {
+    const home = simulatedTable.find((t) => t.id === match.homeId);
+    const away = simulatedTable.find((t) => t.id === match.awayId);
     if (!home || !away) return;
 
-    // Считаем силу на основе рейтинга команды + рандом
-    const homePower = home.rating + Math.random() * 20 + 4; // +4 очка за домашнее поле
+    const homePower = home.rating + Math.random() * 20 + 4;
     const awayPower = away.rating + Math.random() * 20;
 
-    // Начисление очков по правилам футбола/хоккея/баскетбола
-    if (sportId === 1) { // Футбол
+    if (sportId === 1) {
       if (homePower > awayPower + 4) home.points += 3;
       else if (awayPower > homePower + 4) away.points += 3;
-      else { home.points += 1; away.points += 1; }
-    } else if (sportId === 2) { // Хоккей (без чистых ничьих)
+      else {
+        home.points += 1;
+        away.points += 1;
+      }
+    } else if (sportId === 2) {
       if (homePower > awayPower) home.points += 2;
       else away.points += 2;
-    } else { // Баскетбол (простая победа/поражение)
+    } else {
       if (homePower > awayPower) home.points += 1;
       else away.points += 1;
     }
   });
 
-  // Возвращаем отсортированную таблицу прогноза
   return simulatedTable.sort((a, b) => b.points - a.points);
 }
 
@@ -594,7 +733,7 @@ function startSimulation() {
   if (simulationInterval) return;
   simulationInterval = setInterval(runSimulationTick, 10000);
   console.log(
-    "[SIM] Multi-sport simulation started (Limit: 25, Balance: 30%-70%)",
+    "[SIM] Multi-sport strict round-robin simulation engine started (10s intervals)",
   );
 }
 
@@ -609,6 +748,6 @@ function stopSimulation() {
 module.exports = {
   startSimulation,
   stopSimulation,
-  runAiPredictEngine, 
+  runAiPredictEngine,
   isRunning: () => simulationInterval !== null,
 };

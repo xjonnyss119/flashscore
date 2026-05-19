@@ -48,33 +48,35 @@ export default function MatchesScreen({ navigation }) {
 
   const fetchMatches = useCallback(async () => {
     try {
-      const res = await getMatches({
-        status,
-        league_id: leagueId,
-        sport_id: selectedSportId,
-        search: search || undefined,
-      });
-      setMatches(res.data);
+      // Формируем только нужные параметры
+      const params = { sport_id: selectedSportId };
+      if (status) params.status = status;
+      if (leagueId) params.league_id = leagueId;
+      if (search) params.search = search;
+
+      const res = await getMatches(params);
+      setMatches(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(err);
+      console.error("MatchesScreen Error:", err);
+      setMatches([]);
     }
   }, [status, leagueId, search, selectedSportId]);
 
+  // Основной эффект для загрузки данных
   useEffect(() => {
     setLoading(true);
     fetchMatches().finally(() => setLoading(false));
 
-    const interval = setInterval(fetchMatches, 10000);
+    const interval = setInterval(fetchMatches, 15000);
     return () => clearInterval(interval);
   }, [fetchMatches]);
 
+  // Загрузка лиг при старте
   useEffect(() => {
     getLeagues()
-      .then((res) => setLeagues(res.data))
-      .catch(() => {});
+      .then((res) => setLeagues(res.data || []))
+      .catch((err) => console.error("Leagues Load Error:", err));
   }, []);
-
-  const filteredLeagues = leagues.filter((l) => l.sport_id === selectedSportId);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -85,7 +87,6 @@ export default function MatchesScreen({ navigation }) {
   const renderMatch = ({ item }) => {
     const isOT =
       item.is_overtime && (item.sport_id === 2 || item.sport_id === 3);
-
     return (
       <TouchableOpacity
         style={styles.card}
@@ -103,7 +104,7 @@ export default function MatchesScreen({ navigation }) {
             ]}
           >
             {STATUS_LABEL[item.status] || item.status}
-            {item.status === "live" ? `  ${item.minute}'` : ""}
+            {item.status === "live" ? ` ${item.minute}'` : ""}
             {isOT ? " (ОТ)" : ""}
           </Text>
         </View>
@@ -130,7 +131,6 @@ export default function MatchesScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Sport Selector */}
       <View style={styles.sportSelector}>
         {SPORTS.map((sport) => (
           <TouchableOpacity
@@ -141,7 +141,7 @@ export default function MatchesScreen({ navigation }) {
             ]}
             onPress={() => {
               setSelectedSportId(sport.id);
-              setLeagueId(undefined);
+              setLeagueId(undefined); // Сбрасываем лигу при смене спорта
             }}
           >
             <Text style={styles.sportIcon}>{sport.icon}</Text>
@@ -165,36 +165,32 @@ export default function MatchesScreen({ navigation }) {
         onChangeText={setSearch}
       />
 
-      {/* Status filter */}
-      <View style={styles.filtersContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filtersScrollContent}
-        >
-          {STATUS_FILTERS.map((f) => (
-            <TouchableOpacity
-              key={f.label}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filtersScrollContent}
+      >
+        {STATUS_FILTERS.map((f) => (
+          <TouchableOpacity
+            key={f.label}
+            style={[
+              styles.filterBtn,
+              status === f.value && styles.filterActive,
+            ]}
+            onPress={() => setStatus(f.value)}
+          >
+            <Text
               style={[
-                styles.filterBtn,
-                status === f.value && styles.filterActive,
+                styles.filterText,
+                status === f.value && styles.filterTextActive,
               ]}
-              onPress={() => setStatus(f.value)}
             >
-              <Text
-                style={[
-                  styles.filterText,
-                  status === f.value && styles.filterTextActive,
-                ]}
-              >
-                {f.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
-      {/* Лиги только выбранного спорта */}
       <View style={styles.leagueRow}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <TouchableOpacity
@@ -203,22 +199,24 @@ export default function MatchesScreen({ navigation }) {
           >
             <Text style={styles.leagueBtnText}>Все лиги</Text>
           </TouchableOpacity>
-          {filteredLeagues.map((l) => (
-            <TouchableOpacity
-              key={l.id}
-              style={[
-                styles.leagueBtn,
-                leagueId === l.id && styles.leagueActive,
-              ]}
-              onPress={() => setLeagueId(l.id)}
-            >
-              <Text style={styles.leagueBtnText}>{l.name}</Text>
-            </TouchableOpacity>
-          ))}
+          {leagues
+            .filter((l) => l.sport_id === selectedSportId)
+            .map((l) => (
+              <TouchableOpacity
+                key={l.id}
+                style={[
+                  styles.leagueBtn,
+                  leagueId === l.id && styles.leagueActive,
+                ]}
+                onPress={() => setLeagueId(l.id)}
+              >
+                <Text style={styles.leagueBtnText}>{l.name}</Text>
+              </TouchableOpacity>
+            ))}
         </ScrollView>
       </View>
 
-      {loading ? (
+      {loading && matches.length === 0 ? (
         <ActivityIndicator color="#00c853" style={{ marginTop: 40 }} />
       ) : (
         <FlatList
@@ -235,7 +233,6 @@ export default function MatchesScreen({ navigation }) {
           ListEmptyComponent={
             <Text style={styles.empty}>Матчей в этой категории пока нет</Text>
           }
-          contentContainerStyle={{ paddingBottom: 20 }}
         />
       )}
     </View>
@@ -249,8 +246,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#16213e",
     paddingVertical: 10,
     justifyContent: "space-around",
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a4a",
   },
   sportBtn: { alignItems: "center", opacity: 0.6, padding: 5 },
   sportBtnActive: {
@@ -270,14 +265,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#333",
   },
-  filtersContainer: {
-    marginBottom: 8,
-  },
   filtersScrollContent: {
     paddingHorizontal: 12,
     gap: 8,
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: 10,
   },
   filterBtn: {
     paddingHorizontal: 16,
@@ -286,7 +279,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#16213e",
     borderWidth: 1,
     borderColor: "#333",
-    marginRight: 4,
   },
   filterActive: { backgroundColor: "#00c853", borderColor: "#00c853" },
   filterText: { color: "#aaa", fontSize: 12 },
