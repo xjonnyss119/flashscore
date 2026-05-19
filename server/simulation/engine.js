@@ -523,6 +523,71 @@ async function runSimulationTick() {
   }
 }
 
+
+function runAiPredictEngine(teamsFromDb, sportId) {
+  let rotation = [...teamsFromDb];
+  
+  // Добавляем заглушку, если число команд нечётное
+  if (rotation.length % 2 !== 0) {
+    rotation.push({ id: null, name: "Bye", rating: 0, points: 0 });
+  }
+
+  const numTeams = rotation.length;
+  const rounds = numTeams - 1;
+  let firstCircle = [];
+
+  // Генерация кругов по системе Round-Robin (каждый с каждым)
+  for (let round = 0; round < rounds; round++) {
+    for (let i = 0; i < numTeams / 2; i++) {
+      const home = rotation[i];
+      const away = rotation[numTeams - 1 - i];
+      if (home.id !== null && away.id !== null) {
+        firstCircle.push({ homeId: home.id, homeName: home.name, awayId: away.id, awayName: away.name });
+      }
+    }
+    rotation.splice(1, 0, rotation.pop());
+  }
+
+  // Второй круг чемпионата (смена сторон)
+  let secondCircle = firstCircle.map(m => ({ homeId: m.awayId, homeName: m.awayName, awayId: m.homeId, awayName: m.homeName }));
+  const fullCalendar = [...firstCircle, ...secondCircle];
+
+  // Создаем таблицу результатов в оперативной памяти бэкенда
+  let simulatedTable = teamsFromDb.map(t => ({
+    id: t.id,
+    name: t.name,
+    points: parseInt(t.points) || 0,
+    rating: parseInt(t.rating) || 50
+  }));
+
+  // Пробегаемся по матчам в памяти и симулируем исходы с весами рейтинга
+  fullCalendar.forEach(match => {
+    const home = simulatedTable.find(t => t.id === match.homeId);
+    const away = simulatedTable.find(t => t.id === match.awayId);
+    if (!home || !away) return;
+
+    // Считаем силу на основе рейтинга команды + рандом
+    const homePower = home.rating + Math.random() * 20 + 4; // +4 очка за домашнее поле
+    const awayPower = away.rating + Math.random() * 20;
+
+    // Начисление очков по правилам футбола/хоккея/баскетбола
+    if (sportId === 1) { // Футбол
+      if (homePower > awayPower + 4) home.points += 3;
+      else if (awayPower > homePower + 4) away.points += 3;
+      else { home.points += 1; away.points += 1; }
+    } else if (sportId === 2) { // Хоккей (без чистых ничьих)
+      if (homePower > awayPower) home.points += 2;
+      else away.points += 2;
+    } else { // Баскетбол (простая победа/поражение)
+      if (homePower > awayPower) home.points += 1;
+      else away.points += 1;
+    }
+  });
+
+  // Возвращаем отсортированную таблицу прогноза
+  return simulatedTable.sort((a, b) => b.points - a.points);
+}
+
 let simulationInterval = null;
 
 function startSimulation() {
@@ -544,5 +609,6 @@ function stopSimulation() {
 module.exports = {
   startSimulation,
   stopSimulation,
+  runAiPredictEngine, 
   isRunning: () => simulationInterval !== null,
 };

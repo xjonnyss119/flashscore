@@ -10,6 +10,7 @@ import {
   Animated,
   StatusBar,
   Alert,
+  Modal, 
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { getLeagues, getStandings, adminDeleteTeam, getMe } from "../api/api";
@@ -177,6 +178,11 @@ export default function StandingsScreen() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // СТЕЙТЫ ДЛЯ РАБОТЫ С ИИ ПРЕДИКТОРOM
+  const [aiModalVisible, setAiModalVisible] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResponse, setAiResponse] = useState(null);
+
   // Проверка прав администратора (строго 1 раз при монтировании)
   useEffect(() => {
     getMe()
@@ -243,6 +249,36 @@ export default function StandingsScreen() {
       .catch(() => setStandings([]))
       .finally(() => setLoading(false));
   }, [selectedLeague]);
+
+  // ФУНКЦИЯ ОПРОСА СЕРВЕРНОГО ИИ-АНАЛИТИКА
+  const handleFetchAiPrediction = async () => {
+    if (!selectedLeague) {
+      Alert.alert(
+        "Внимание",
+        "Пожалуйста, выберите лигу для генерации прогноза.",
+      );
+      return;
+    }
+
+    setAiLoading(true);
+    setAiModalVisible(true);
+
+    try {
+      const response = await fetch(
+        `http://flashscore-backend-r1js.onrender.com/api/teams/ai-prediction?leagueId=${selectedLeague.id}&sportId=${selectedSportId}`,
+      );
+      const data = await response.json();
+      setAiResponse(data);
+    } catch (error) {
+      console.error("[FRONT] AI Fetch error:", error);
+      setAiResponse({
+        analysis:
+          "Ошибка соединения с сервером предиктивной аналитики. Проверьте, запущен ли ваш бэкенд.",
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const handleDeleteTeam = (teamId, teamName) => {
     Alert.alert(
@@ -354,6 +390,17 @@ export default function StandingsScreen() {
 
       {renderLegend()}
 
+      {standings.length > 0 && (
+        <TouchableOpacity
+          style={styles.aiButton}
+          onPress={handleFetchAiPrediction}
+        >
+          <Text style={styles.aiButtonText}>
+            🤖 Сгенерировать ИИ-прогноз сезона
+          </Text>
+        </TouchableOpacity>
+      )}
+
       <View style={styles.tableHeader}>
         <View style={styles.zoneStripe} />
         <Text style={styles.posHeader}>#</Text>
@@ -412,6 +459,53 @@ export default function StandingsScreen() {
           contentContainerStyle={{ paddingBottom: 20 }}
         />
       )}
+
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={aiModalVisible}
+        onRequestClose={() => setAiModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Аналитический ИИ-Прогноз</Text>
+
+            {aiLoading ? (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator size="large" color="#00c853" />
+                <Text style={styles.loadingText}>
+                  ИИ генерирует Round-Robin календарь, симулирует оставшиеся
+                  туры в памяти сервера и формирует спортивную сводку...
+                </Text>
+              </View>
+            ) : (
+              <ScrollView
+                style={styles.scrollContainer}
+                showsVerticalScrollIndicator={false}
+              >
+                {aiResponse?.winner && (
+                  <View style={styles.winnerBadge}>
+                    <Text style={styles.winnerLabel}>
+                      🏆 Потенциальный чемпион:
+                    </Text>
+                    <Text style={styles.winnerName}>{aiResponse.winner}</Text>
+                  </View>
+                )}
+                <Text style={styles.analysisText}>
+                  {aiResponse?.analysis || "Нет доступных данных."}
+                </Text>
+              </ScrollView>
+            )}
+
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setAiModalVisible(false)}
+            >
+              <Text style={styles.closeButtonText}>Закрыть отчет</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -419,6 +513,8 @@ export default function StandingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#1a1a2e" },
   sportSelector: {
+    flex: 1,
+    maxHeight: 65,
     flexDirection: "row",
     backgroundColor: "#16213e",
     paddingVertical: 10,
@@ -457,6 +553,99 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { color: "#888", fontSize: 10 },
+
+  // КНОПКА ИИ
+  aiButton: {
+    backgroundColor: "#16213e",
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginHorizontal: 12,
+    marginBottom: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#00c853",
+  },
+  aiButtonText: {
+    color: "#00c853",
+    fontWeight: "bold",
+    fontSize: 13,
+  },
+
+  // МОДАЛЬНОЕ ОКНО СТИЛИ
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.85)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#16213e",
+    width: "90%",
+    maxHeight: "75%",
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2a2a4a",
+  },
+  modalTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 15,
+    textAlign: "center",
+  },
+  loadingBox: {
+    alignItems: "center",
+    marginVertical: 30,
+  },
+  loadingText: {
+    color: "#aaa",
+    marginTop: 15,
+    textAlign: "center",
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  scrollContainer: {
+    marginVertical: 10,
+  },
+  winnerBadge: {
+    backgroundColor: "rgba(0, 200, 83, 0.1)",
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(0, 200, 83, 0.4)",
+    marginBottom: 12,
+    alignItems: "center",
+  },
+  winnerLabel: {
+    color: "#aaa",
+    fontSize: 12,
+  },
+  winnerName: {
+    color: "#00c853",
+    fontSize: 16,
+    fontWeight: "bold",
+    marginTop: 2,
+  },
+  analysisText: {
+    color: "#ddd",
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: "left",
+  },
+  closeButton: {
+    backgroundColor: "#2a2a4a",
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 10,
+    alignItems: "center",
+  },
+  closeButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+
   tableHeader: {
     flexDirection: "row",
     alignItems: "center",
