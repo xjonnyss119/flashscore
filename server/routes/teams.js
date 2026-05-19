@@ -35,7 +35,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// МЕНЯЕМ С GET НА POST
+// РОУТ ДЛЯ ИИ-ПРОГНОЗА НА ГАЗУ GEMINI
 router.post("/ai-prediction", async (req, res) => {
   try {
     // Получаем sportId из query, а готовые команды — из тела запроса (body)
@@ -131,44 +131,55 @@ router.post("/ai-prediction", async (req, res) => {
     const sportNames = { 1: "Футбольной", 2: "Хоккейной", 3: "Баскетбольной" };
     const currentSportName = sportNames[sportId] || "Спортивной";
 
+    // Промпт для генерации структурированного ответа
     const systemPrompt = `Ты — топовый, харизматичный спортивный аналитик и эксперт. 
     Тебе предоставлена итоговая таблица ${currentSportName} лиги, полученная в результате математической симуляции оставшихся матчей сезона.
     Твоя задача — написать яркий, экспертный разбор итогов. Назови чемпиона, выдели главные сенсации (кто прыгнул выше головы) и главные провалы сезона. 
     Пиши живым языком, как пишут в спортивных медиа. Не используй сухие штампы.
     
-    Ответь СТРОГО в формате JSON (без Markdown-разметки типа \`\`\`json):
+    Ты обязан вернуть ответ строго в формате JSON:
     {
       "winner": "Точное название команды-чемпиона",
       "analysis": "Твой развернутый аналитический текст на русском языке..."
     }`;
 
+    const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
+
+    // Эндпоинт для работы с моделью gemini-1.5-flash
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    // Запрос к Google Gemini API
     const response = await axios.post(
-      "https://api.deepseek.com/v1/chat/completions",
+      geminiUrl,
       {
-        model: "deepseek-chat",
-        messages: [
-          { role: "system", content: systemPrompt },
+        contents: [
           {
-            role: "user",
-            content: `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`,
+            parts: [{ text: `${systemPrompt}\n\nДанные:\n${userContent}` }],
           },
         ],
-        response_format: { type: "json_object" },
-        temperature: 0.6,
+        generationConfig: {
+          responseMimeType: "application/json", // Принудительно требуем JSON на выходе
+          temperature: 0.6,
+        },
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
           "Content-Type": "application/json",
         },
       },
     );
 
-    const aiData = JSON.parse(response.data.choices[0].message.content);
+    // Достаем текст ответа из структуры ответа Google API
+    const textResponse = response.data.candidates[0].content.parts[0].text;
+
+    // Парсим в JSON и выплевываем на фронтенд
+    const aiData = JSON.parse(textResponse);
     return res.status(200).json(aiData);
   } catch (error) {
-    console.error("AI Route Error:", error);
-    return res.status(500).json({ error: "Ошибка модуля прогнозирования ИИ" });
+    console.error("AI Route Error:", error?.response?.data || error.message);
+    return res
+      .status(500)
+      .json({ error: "Ошибка модуля прогнозирования Gemini ИИ" });
   }
 });
 

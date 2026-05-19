@@ -10,7 +10,7 @@ import {
   Animated,
   StatusBar,
   Alert,
-  Modal, 
+  Modal,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { getLeagues, getStandings, adminDeleteTeam, getMe } from "../api/api";
@@ -252,8 +252,9 @@ export default function StandingsScreen() {
 
   // ФУНКЦИЯ ОПРОСА СЕРВЕРНОГО ИИ-АНАЛИТИКА
   const handleFetchAiPrediction = async () => {
+    // Проверяем, есть ли вообще данные в таблице, которую видит пользователь
     if (!selectedLeague || standings.length === 0) {
-      Alert.alert("Внимание", "Нет данных для генерации прогноза.");
+      Alert.alert("Внимание", "Нет данных лиги для генерации прогноза.");
       return;
     }
 
@@ -261,30 +262,31 @@ export default function StandingsScreen() {
     setAiModalVisible(true);
 
     try {
-      // Меняем URL на твой рабочий хост на Render, когда зальешь туда бэк, либо локальный для тестов
-      // Передаем только sportId, а саму таблицу кидаем в body
       const response = await fetch(
         `http://flashscore-backend-r1js.onrender.com/api/teams/ai-prediction?sportId=${selectedSportId}`,
         {
-          method: "POST", // Меняем метод на POST
+          method: "POST", // Обязательно POST метод
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ teams: standings }), // Передаем актуальные команды с очками
-        }
+          body: JSON.stringify({ teams: standings }), // Передаем актуальную таблицу с очками прямиком в body
+        },
       );
-      
+
       const data = await response.json();
-      
+
       if (response.ok) {
-        setAiResponse(data);
+        setAiResponse(data); // Сюда прилетит красивый JSON { winner, analysis } от Gemini
       } else {
-        setAiResponse({ analysis: data.error || "Произошла ошибка при генерации прогноза." });
+        setAiResponse({
+          analysis: data.error || "Произошла ошибка при генерации прогноза.",
+        });
       }
     } catch (error) {
       console.error("[FRONT] AI Fetch error:", error);
       setAiResponse({
-        analysis: "Ошибка соединения с сервером предиктивной аналитики. Проверьте сеть или статус бэкенда.",
+        analysis:
+          "Ошибка соединения с сервером предиктивной аналитики. Проверьте сеть или статус бэкенда.",
       });
     } finally {
       setAiLoading(false);
