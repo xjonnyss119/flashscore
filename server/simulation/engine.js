@@ -1,99 +1,208 @@
 const pool = require("../db/pool");
 
 const PLAYERS = [
-  "Иванов",
-  "Петров",
-  "Сидоров",
-  "Козлов",
-  "Новиков",
-  "Морозов",
-  "Попов",
-  "Лебедев",
-  "Семёнов",
-  "Егоров",
+  "Иванов", "Петров", "Сидоров", "Козлов", "Новиков",
+  "Морозов", "Попов", "Лебедев", "Семёнов", "Егоров",
 ];
 
 function randomPlayer() {
   return PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
 }
 
-async function generateRandomMatch(status = "scheduled") {
+function getMaxRounds(sportId) {
+  return sportId === 1 ? 2 : 4;
+}
+
+async function getNextRoundRobinPair(leagueId, sportId) {
   try {
-    const leagueRes = await pool.query(`
-      SELECT l.id, l.sport_id 
-      FROM leagues l
-      JOIN sports s ON l.sport_id = s.id
-      ORDER BY RANDOM() 
-      LIMIT 1
-    `);
-
-    if (leagueRes.rows.length === 0) return;
-    const { id: leagueId, sport_id: sportId } = leagueRes.rows[0];
-
     const teamsRes = await pool.query(
-      `
-      SELECT id, rating FROM teams 
-      WHERE league_id = $1 
-      AND id NOT IN (
-          SELECT home_team_id FROM matches WHERE status IN ('scheduled', 'live')
-          UNION
-          SELECT away_team_id FROM matches WHERE status IN ('scheduled', 'live')
-      )
-      ORDER BY RANDOM() 
-      LIMIT 2
-    `,
-      [leagueId],
+      "SELECT id, rating FROM teams WHERE league_id = $1 ORDER BY id",
+      [leagueId]
     );
+    const teams = teamsRes.rows;
+    if (teams.length < 2) return null;
 
-    if (teamsRes.rows.length < 2) return;
+    const maxRounds = getMaxRounds(sportId);
+    const totalMatchesPerTeam = maxRounds * (teams.length - 1);
 
-    const teamA = teamsRes.rows[0];
-    const teamB = teamsRes.rows[1];
+    const playedRes = await pool.query(
+      "SELECT team_id, played FROM standings WHERE league_id = $1",
+      [leagueId]
+    );
+    const playedMap = {};
+    playedRes.rows.forEach(r => { playedMap[r.team_id] = r.played || 0; });
+    teams.forEach(t => { if (!playedMap[t.id]) playedMap[t.id] = 0; });
 
-    const delayMinutes =
-      status === "live" ? 0 : Math.floor(Math.random() * 11) + 5;
+    const minPlayed = Math.min(...teams.map(t => playedMap[t.id] || 0));
+
+    if (minPlayed >= totalMatchesPerTeam) {
+      return { seasonComplete: true };
+    }
+
+    const pendingRes = await pool.query(
+      "SELECT home_team_id, away_team_id FROM matches WHERE league_id = $1 AND status IN ('scheduled','live')",
+      [leagueId]
+    );
+    const busyTeams = new Set();
+    pendingRes.rows.forEach(m => {
+      busyTeams.add(m.home_team_id);
+      busyTeams.add(m.away_team_id);
+    });
+
+    const pairCountRes = await pool.query(
+      "SELECT home_team_id, away_team_id FROM matches WHERE league_id = $1 AND status = 'finished'",
+      [leagueId]
+    );
+    const pairCount = {};
+    pairCountRes.rows.forEach(m => {
+      const key = [m.home_team_id, m.away_team_id].sort().join('_');
+      pairCount[key] = (pairCount[key] || 0) + 1;
+    });
+
+    // Команды которые отстают (ещё не сыграли текущий круг)
+    const teamsInCurrentRound = teams.filter(t => (playedMap[t.id] || 0) === minPlayed);
+    const available = teamsInCurrentRound.filter(t => !busyTeams.has(t.id));
+    if (available.length < 2) return null;
+
+    const shuffled = [...available].sort(() => Math.random() - 0.5);
+
+    for (let i = 0; i < shuffled.length; i++) {
+      for (let j = i + 1; j < shuffled.length; j++) {
+        const a = shuffled[i];
+        const b = shuffled[j];
+        const key = [a.id, b.id].sort().join('_');
+        const timesPlayed = pairCount[key] || 0;
+
+        if (timesPlayed < maxRounds) {
+          const homeFirst = timesPlayed % 2 === 0 ? a : b;
+          const awayFirst = timesPlayed % 2 === 0 ? b : a;
+          return { home: homeFirst, away: awayFirst };
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error("[RR] Error in getNextRoundRobinPair:", err.message);
+    return null;
+  }
+}
+
+async function generateRoundRobinMatch(leagueId, sportId) {
+  try {
+    const pair = await getNextRoundRobinPair(leagueId, sportId);
+    if (!pair) return;
+    if (pair.seasonComplete) {
+      await handleSeasonComplete(leagueId, sportId);
+      return;
+    }
+
+    const { home, away } = pair;
+    const delayMinutes = Math.floor(Math.random() * 6) + 2;
     const startTime = new Date(Date.now() + delayMinutes * 60 * 1000);
 
     await pool.query(
-      `INSERT INTO matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, home_score, away_score, minute, updated_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0, NOW())`,
-      [teamA.id, teamB.id, leagueId, sportId, startTime, status],
+      `INSERT INTO matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, home_score, away_score, minute, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'scheduled', 0, 0, 0, NOW())`,
+      [home.id, away.id, leagueId, sportId, startTime]
     );
 
-    console.log(
-      `[SIM][МАТЕМАТИКА] Сгенерирован матч [Статус: ${status.toUpperCase()}] (Спорт ID: ${sportId}): Команда ${teamA.id} vs ${teamB.id}`,
-    );
+    console.log(`[SIM][RR] Лига ${leagueId}: команды ${home.id} vs ${away.id}`);
   } catch (err) {
-    console.error("[SIM] Generation error:", err.message);
+    console.error("[SIM][RR] Generation error:", err.message);
+  }
+}
+
+async function handleSeasonComplete(leagueId, sportId) {
+  try {
+    const existing = await pool.query(
+      "SELECT id FROM seasons WHERE league_id = $1 AND status = 'countdown'",
+      [leagueId]
+    );
+    if (existing.rows.length > 0) return;
+
+    if (!sportId) {
+      const lr = await pool.query("SELECT sport_id FROM leagues WHERE id = $1", [leagueId]);
+      if (lr.rows.length === 0) return;
+      sportId = Number(lr.rows[0].sport_id);
+    }
+
+    let orderClause;
+    if (sportId === 3) {
+      orderClause = `(CASE WHEN s.played > 0 THEN s.wins::float / s.played ELSE 0 END) DESC, (s.goals_for - s.goals_against) DESC`;
+    } else {
+      orderClause = `s.points DESC, (s.goals_for - s.goals_against) DESC, s.wins DESC`;
+    }
+
+    const champRes = await pool.query(`
+      SELECT t.id, t.name FROM standings s
+      JOIN teams t ON s.team_id = t.id
+      WHERE s.league_id = $1
+      ORDER BY ${orderClause}
+      LIMIT 1
+    `, [leagueId]);
+
+    const champion = champRes.rows[0] || null;
+    const nextSeasonStart = new Date(Date.now() + 60 * 1000);
+
+    await pool.query(`
+      INSERT INTO seasons (league_id, champion_team_id, status, next_season_at)
+      VALUES ($1, $2, 'countdown', $3)
+      ON CONFLICT (league_id) DO UPDATE SET
+        champion_team_id = EXCLUDED.champion_team_id,
+        status = 'countdown',
+        next_season_at = EXCLUDED.next_season_at,
+        completed_at = NOW()
+    `, [leagueId, champion?.id || null, nextSeasonStart]);
+
+    console.log(`[SIM][SEASON] Лига ${leagueId}: сезон завершён! Чемпион: ${champion?.name || 'Нет'}`);
+  } catch (err) {
+    console.error("[SIM][SEASON] handleSeasonComplete error:", err.message);
+  }
+}
+
+async function startNewSeason(leagueId) {
+  try {
+    console.log(`[SIM][SEASON] Лига ${leagueId}: запуск нового сезона...`);
+
+    await pool.query("DELETE FROM standings WHERE league_id = $1", [leagueId]);
+
+    const teamsRes = await pool.query("SELECT id FROM teams WHERE league_id = $1", [leagueId]);
+    for (const team of teamsRes.rows) {
+      await pool.query(
+        "INSERT INTO standings (team_id, league_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [team.id, leagueId]
+      );
+    }
+
+    const finishedRes = await pool.query(
+      "SELECT id FROM matches WHERE league_id = $1 AND status = 'finished'",
+      [leagueId]
+    );
+    const matchIds = finishedRes.rows.map(r => r.id);
+    if (matchIds.length > 0) {
+      await pool.query("DELETE FROM events WHERE match_id = ANY($1)", [matchIds]);
+      await pool.query("DELETE FROM matches WHERE id = ANY($1)", [matchIds]);
+    }
+
+    await pool.query(
+      "UPDATE seasons SET status = 'active', next_season_at = NULL, ai_prediction = NULL, ai_prediction_updated = NULL WHERE league_id = $1",
+      [leagueId]
+    );
+
+    console.log(`[SIM][SEASON] Лига ${leagueId}: новый сезон начался!`);
+  } catch (err) {
+    console.error("[SIM][SEASON] startNewSeason error:", err.message);
   }
 }
 
 function getEventSettings(sportId, ratingA, ratingB) {
   const avg = (ratingA + ratingB) / 2;
   const ratingModifier = 0.5 + avg / 100;
-
   switch (sportId) {
-    case 2:
-      return {
-        scoreProb: 0.07 * ratingModifier,
-        scoreType: "puck",
-        cardProb: 0.04,
-        cardType: "penalty",
-      };
-    case 3:
-      return {
-        scoreProb: 1.75 * ratingModifier,
-        scoreType: "basket",
-        cardProb: 0.02,
-        cardType: "foul",
-      };
-    default:
-      return {
-        scoreProb: 0.015 + (avg / 100) * 0.01,
-        scoreType: "goal",
-        cardProb: 0.03,
-        cardType: "yellow_card",
-      };
+    case 2: return { scoreProb: 0.07 * ratingModifier, scoreType: "puck", cardProb: 0.04, cardType: "penalty" };
+    case 3: return { scoreProb: 1.75 * ratingModifier, scoreType: "basket", cardProb: 0.02, cardType: "foul" };
+    default: return { scoreProb: 0.015 + (avg / 100) * 0.01, scoreType: "goal", cardProb: 0.03, cardType: "yellow_card" };
   }
 }
 
@@ -102,149 +211,63 @@ async function tickMatch(match) {
   let currentHomeScore = match.home_score;
   let currentAwayScore = match.away_score;
   let isOvertime = match.is_overtime || false;
-
   const newMinute = match.minute + 1;
   const regularMaxMinutes = sportId === 2 ? 60 : sportId === 3 ? 48 : 90;
 
   if (isOvertime) {
-    if (sportId === 2) {
-      if (newMinute > regularMaxMinutes + 20) {
-        const homeWinsPenalties = Math.random() > 0.5;
-        if (homeWinsPenalties) currentHomeScore += 1;
-        else currentAwayScore += 1;
-
-        const winnerTeamId = homeWinsPenalties
-          ? match.home_team_id
-          : match.away_team_id;
-        await pool.query(
-          "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1, $2, 'puck', $3, 'Победный буллит')",
-          [match.id, regularMaxMinutes + 20, winnerTeamId],
-        );
-
-        await finishAndAddToStandings(
-          match,
-          regularMaxMinutes + 20,
-          currentHomeScore,
-          currentAwayScore,
-          isOvertime,
-        );
-        return;
-      }
+    if (sportId === 2 && newMinute > regularMaxMinutes + 20) {
+      const homeWins = Math.random() > 0.5;
+      if (homeWins) currentHomeScore += 1; else currentAwayScore += 1;
+      await pool.query(
+        "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1, $2, 'puck', $3, 'Победный буллит')",
+        [match.id, regularMaxMinutes + 20, homeWins ? match.home_team_id : match.away_team_id]
+      );
+      await finishAndAddToStandings(match, regularMaxMinutes + 20, currentHomeScore, currentAwayScore, isOvertime);
+      return;
     }
-
     if (sportId === 3) {
-      const otMinutesPlayed = newMinute - regularMaxMinutes;
-      if (otMinutesPlayed > 0 && otMinutesPlayed % 5 === 0) {
+      const otMins = newMinute - regularMaxMinutes;
+      if (otMins > 0 && otMins % 5 === 0) {
         if (currentHomeScore !== currentAwayScore) {
-          await finishAndAddToStandings(
-            match,
-            newMinute,
-            currentHomeScore,
-            currentAwayScore,
-            isOvertime,
-          );
+          await finishAndAddToStandings(match, newMinute, currentHomeScore, currentAwayScore, isOvertime);
           return;
         }
-        await pool.query(
-          "INSERT INTO events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система (2-й ОТ или далее)')",
-          [match.id, newMinute],
-        );
       }
     }
   } else if (newMinute > regularMaxMinutes) {
-    if (
-      (sportId === 2 || sportId === 3) &&
-      currentHomeScore === currentAwayScore
-    ) {
+    if ((sportId === 2 || sportId === 3) && currentHomeScore === currentAwayScore) {
       isOvertime = true;
-      await pool.query(
-        "INSERT INTO events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система')",
-        [match.id, regularMaxMinutes],
-      );
+      await pool.query("INSERT INTO events (match_id, minute, type, player_name) VALUES ($1, $2, 'overtime_start', 'Система')", [match.id, regularMaxMinutes]);
     } else {
-      await finishAndAddToStandings(
-        match,
-        regularMaxMinutes,
-        currentHomeScore,
-        currentAwayScore,
-        isOvertime,
-      );
+      await finishAndAddToStandings(match, regularMaxMinutes, currentHomeScore, currentAwayScore, isOvertime);
       return;
     }
   }
 
-  await pool.query(
-    "UPDATE matches SET minute = $1, is_overtime = $2, updated_at = NOW() WHERE id = $3",
-    [newMinute, isOvertime, match.id],
-  );
+  await pool.query("UPDATE matches SET minute = $1, is_overtime = $2, updated_at = NOW() WHERE id = $3", [newMinute, isOvertime, match.id]);
 
-  const teamsRes = await pool.query(
-    "SELECT id, name, rating FROM teams WHERE id IN ($1, $2)",
-    [match.home_team_id, match.away_team_id],
-  );
-  const hT = teamsRes.rows.find((t) => t.id === match.home_team_id);
-  const aT = teamsRes.rows.find((t) => t.id === match.away_team_id);
-
-  const settings = getEventSettings(
-    sportId,
-    hT?.rating || 50,
-    aT?.rating || 50,
-  );
-
-  const homeTeamName = hT?.name || "Хозяева";
-  const awayTeamName = aT?.name || "Гости";
+  const teamsRes = await pool.query("SELECT id, name, rating FROM teams WHERE id IN ($1, $2)", [match.home_team_id, match.away_team_id]);
+  const hT = teamsRes.rows.find(t => t.id === match.home_team_id);
+  const aT = teamsRes.rows.find(t => t.id === match.away_team_id);
+  const settings = getEventSettings(sportId, hT?.rating || 50, aT?.rating || 50);
 
   if (Math.random() < settings.scoreProb) {
-    const side =
-      Math.random() < hT?.rating / (hT?.rating + aT?.rating) ? "home" : "away";
-    let points = 1;
-    let type = settings.scoreType;
-
+    const side = Math.random() < hT?.rating / (hT?.rating + aT?.rating) ? "home" : "away";
+    let points = 1, type = settings.scoreType;
     if (sportId === 3) {
       const roll = Math.random();
-      if (roll < 0.3) {
-        points = 3;
-        type = "3_pointer";
-      } else if (roll < 0.9) {
-        points = 2;
-        type = "2_pointer";
-      } else {
-        points = 1;
-        type = "free_throw";
-      }
+      if (roll < 0.3) { points = 3; type = "3_pointer"; }
+      else if (roll < 0.9) { points = 2; type = "2_pointer"; }
+      else { points = 1; type = "free_throw"; }
     }
-
-    if (side === "home") currentHomeScore += points;
-    else currentAwayScore += points;
-    const scoringTeam = side === "home" ? homeTeamName : awayTeamName;
-
-    await pool.query(
-      `UPDATE matches SET ${side}_score = ${side}_score + $1, updated_at = NOW() WHERE id = $2`,
-      [points, match.id],
-    );
-    await pool.query(
-      "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
-      [
-        match.id,
-        newMinute,
-        type,
-        side === "home" ? match.home_team_id : match.away_team_id,
-        randomPlayer(),
-      ],
-    );
-
-    const otMark = isOvertime ? " (ОТ)" : "";
-    const scoreMessage = `Очки: +${points} (${newMinute}'${otMark}) — ${scoringTeam}`;
-    await notifyFavoriteUsers(match.id, type, scoreMessage);
-
+    if (side === "home") currentHomeScore += points; else currentAwayScore += points;
+    await pool.query(`UPDATE matches SET ${side}_score = ${side}_score + $1, updated_at = NOW() WHERE id = $2`, [points, match.id]);
+    await pool.query("INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
+      [match.id, newMinute, type, side === "home" ? match.home_team_id : match.away_team_id, randomPlayer()]);
+    const name = side === "home" ? hT?.name : aT?.name;
+    await notifyFavoriteUsers(match.id, type, `Очки: +${points} (${newMinute}'${isOvertime ? ' (ОТ)' : ''}) — ${name}`);
     if (sportId === 2 && isOvertime) {
-      await finishAndAddToStandings(
-        match,
-        newMinute,
-        currentHomeScore,
-        currentAwayScore,
-        isOvertime,
-      );
+      await finishAndAddToStandings(match, newMinute, currentHomeScore, currentAwayScore, isOvertime);
       return;
     }
   }
@@ -252,69 +275,55 @@ async function tickMatch(match) {
   if (settings.cardProb > 0 && Math.random() < settings.cardProb) {
     const side = Math.random() < 0.5 ? "home" : "away";
     const teamId = side === "home" ? match.home_team_id : match.away_team_id;
-    const penalizedTeam = side === "home" ? homeTeamName : awayTeamName;
-
-    await pool.query(
-      "INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
-      [match.id, newMinute, settings.cardType, teamId, randomPlayer()],
-    );
-
-    let cardText = "Нарушение правил";
-    if (settings.cardType === "yellow_card") cardText = "🟨 Желтая карточка";
-    if (settings.cardType === "penalty") cardText = "⏱️ Удаление 2 мин";
-    if (settings.cardType === "foul") cardText = "⚠️ Фол";
-
-    const cardMessage = `${cardText} (${newMinute}') — ${penalizedTeam}`;
-    await notifyFavoriteUsers(match.id, settings.cardType, cardMessage);
+    await pool.query("INSERT INTO events (match_id, minute, type, team_id, player_name) VALUES ($1,$2,$3,$4,$5)",
+      [match.id, newMinute, settings.cardType, teamId, randomPlayer()]);
+    const name = side === "home" ? hT?.name : aT?.name;
+    const cardText = settings.cardType === "yellow_card" ? "🟨 Желтая" : settings.cardType === "penalty" ? "⏱️ Удаление" : "⚠️ Фол";
+    await notifyFavoriteUsers(match.id, settings.cardType, `${cardText} (${newMinute}') — ${name}`);
   }
 }
 
-async function finishAndAddToStandings(
-  match,
-  finalMinute,
-  homeScore,
-  awayScore,
-  isOvertime,
-) {
+async function finishAndAddToStandings(match, finalMinute, homeScore, awayScore, isOvertime) {
   await pool.query(
     "UPDATE matches SET status = 'finished', minute = $1, home_score = $2, away_score = $3, is_overtime = $4, updated_at = NOW() WHERE id = $5",
-    [finalMinute, homeScore, awayScore, isOvertime, match.id],
+    [finalMinute, homeScore, awayScore, isOvertime, match.id]
   );
+  await updateStandings({ ...match, home_score: homeScore, away_score: awayScore, is_overtime: isOvertime });
+  if (match.league_id) {
+    setImmediate(() => checkSeasonCompletion(match.league_id));
+  }
+}
 
-  const finalMatchData = {
-    ...match,
-    home_score: homeScore,
-    away_score: awayScore,
-    is_overtime: isOvertime,
-  };
+async function checkSeasonCompletion(leagueId) {
+  try {
+    const activeRes = await pool.query(
+      "SELECT COUNT(*) FROM matches WHERE league_id = $1 AND status IN ('scheduled','live')",
+      [leagueId]
+    );
+    if (parseInt(activeRes.rows[0].count, 10) > 0) return;
 
-  await updateStandings(finalMatchData);
+    const seasonRes = await pool.query("SELECT status FROM seasons WHERE league_id = $1", [leagueId]);
+    if (seasonRes.rows.length > 0 && seasonRes.rows[0].status === 'countdown') return;
 
-  const countRes = await pool.query("SELECT COUNT(*) FROM matches");
-  if (parseInt(countRes.rows[0].count, 10) >= 49) {
-    await pool.query(`
-      DELETE FROM matches 
-      WHERE id IN (
-        SELECT id FROM matches 
-        WHERE status = 'finished' 
-        ORDER BY updated_at ASC 
-        LIMIT 20
-      )
-    `);
+    const leagueRes = await pool.query("SELECT sport_id FROM leagues WHERE id = $1", [leagueId]);
+    if (leagueRes.rows.length === 0) return;
+    const sportId = Number(leagueRes.rows[0].sport_id);
+
+    const pair = await getNextRoundRobinPair(leagueId, sportId);
+    if (pair && pair.seasonComplete) {
+      await handleSeasonComplete(leagueId, sportId);
+    }
+  } catch (err) {
+    console.error("[SIM] checkSeasonCompletion error:", err.message);
   }
 }
 
 async function notifyFavoriteUsers(matchId, eventType, message) {
   try {
-    const favs = await pool.query(
-      "SELECT user_id FROM favorites WHERE match_id = $1",
-      [matchId],
-    );
+    const favs = await pool.query("SELECT user_id FROM favorites WHERE match_id = $1", [matchId]);
     for (const fav of favs.rows) {
-      await pool.query(
-        "INSERT INTO notifications (user_id, match_id, type, message) VALUES ($1, $2, $3, $4)",
-        [fav.user_id, matchId, eventType, message],
-      );
+      await pool.query("INSERT INTO notifications (user_id, match_id, type, message) VALUES ($1, $2, $3, $4)",
+        [fav.user_id, matchId, eventType, message]);
     }
   } catch (err) {
     console.error("[SIM] Notification error:", err.message);
@@ -323,78 +332,26 @@ async function notifyFavoriteUsers(matchId, eventType, message) {
 
 async function updateStandings(match) {
   try {
-    const {
-      home_team_id,
-      away_team_id,
-      home_score,
-      away_score,
-      league_id,
-      is_overtime,
-    } = match;
-
-    const leagueRes = await pool.query(
-      "SELECT sport_id FROM leagues WHERE id = $1",
-      [league_id],
-    );
+    const { home_team_id, away_team_id, home_score, away_score, league_id, is_overtime } = match;
+    const leagueRes = await pool.query("SELECT sport_id FROM leagues WHERE id = $1", [league_id]);
     if (leagueRes.rows.length === 0) return;
     const sportId = Number(leagueRes.rows[0].sport_id);
 
-    let hW = 0,
-      hD = 0,
-      hL = 0,
-      hP = 0;
-    let aW = 0,
-      aD = 0,
-      aP = 0,
-      aL = 0;
-    let hW_ot = 0,
-      hL_ot = 0,
-      aW_ot = 0,
-      aL_ot = 0;
+    let hW=0,hD=0,hL=0,hP=0,aW=0,aD=0,aP=0,aL=0,hW_ot=0,hL_ot=0,aW_ot=0,aL_ot=0;
 
     if (sportId === 1) {
-      if (home_score > away_score) {
-        hW = 1;
-        hP = 3;
-        aL = 1;
-      } else if (home_score === away_score) {
-        hD = 1;
-        hP = 1;
-        aD = 1;
-        aP = 1;
-      } else {
-        hL = 1;
-        aW = 1;
-        aP = 3;
-      }
+      if (home_score > away_score) { hW=1;hP=3;aL=1; }
+      else if (home_score === away_score) { hD=1;hP=1;aD=1;aP=1; }
+      else { hL=1;aW=1;aP=3; }
     } else if (sportId === 2) {
       if (home_score > away_score) {
-        hW = is_overtime ? 0 : 1;
-        hW_ot = is_overtime ? 1 : 0;
-        hP = 2;
-        aL = is_overtime ? 0 : 1;
-        aL_ot = is_overtime ? 1 : 0;
-        aP = is_overtime ? 1 : 0;
+        hW=is_overtime?0:1;hW_ot=is_overtime?1:0;hP=2;aL=is_overtime?0:1;aL_ot=is_overtime?1:0;aP=is_overtime?1:0;
       } else {
-        hL = is_overtime ? 0 : 1;
-        hL_ot = is_overtime ? 1 : 0;
-        hP = is_overtime ? 1 : 0;
-        aW = is_overtime ? 0 : 1;
-        aW_ot = is_overtime ? 1 : 0;
-        aP = 2;
+        hL=is_overtime?0:1;hL_ot=is_overtime?1:0;hP=is_overtime?1:0;aW=is_overtime?0:1;aW_ot=is_overtime?1:0;aP=2;
       }
     } else if (sportId === 3) {
-      if (home_score > away_score) {
-        hW = 1;
-        hP = 1;
-        aL = 1;
-        aP = 0;
-      } else {
-        hL = 1;
-        hP = 0;
-        aW = 1;
-        aP = 1;
-      }
+      if (home_score > away_score) { hW=1;hP=1;aL=1;aP=0; }
+      else { hL=1;hP=0;aW=1;aP=1; }
     }
 
     const upsert = async (tId, w, d, l, p, gf, ga, w_ot, l_ot) => {
@@ -402,41 +359,16 @@ async function updateStandings(match) {
         `INSERT INTO standings (team_id, league_id, played, wins, draws, losses, points, goals_for, goals_against, wins_ot, losses_ot)
          VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (team_id, league_id) DO UPDATE SET
-           played = standings.played + 1, 
-           wins = standings.wins + $3, 
-           draws = standings.draws + $4,
-           losses = standings.losses + $5, 
-           points = standings.points + $6,
-           goals_for = standings.goals_for + $7, 
-           goals_against = standings.goals_against + $8,
-           wins_ot = COALESCE(standings.wins_ot, 0) + $9,
-           losses_ot = COALESCE(standings.losses_ot, 0) + $10`,
-        [tId, league_id, w, d, l, p, gf, ga, w_ot, l_ot],
+           played = standings.played + 1, wins = standings.wins + $3, draws = standings.draws + $4,
+           losses = standings.losses + $5, points = standings.points + $6,
+           goals_for = standings.goals_for + $7, goals_against = standings.goals_against + $8,
+           wins_ot = COALESCE(standings.wins_ot,0) + $9, losses_ot = COALESCE(standings.losses_ot,0) + $10`,
+        [tId, league_id, w, d, l, p, gf, ga, w_ot, l_ot]
       );
     };
 
-    await upsert(
-      home_team_id,
-      hW,
-      hD,
-      hL,
-      hP,
-      home_score,
-      away_score,
-      hW_ot,
-      hL_ot,
-    );
-    await upsert(
-      away_team_id,
-      aW,
-      aD,
-      aL,
-      aP,
-      away_score,
-      home_score,
-      aW_ot,
-      aL_ot,
-    );
+    await upsert(home_team_id, hW, hD, hL, hP, home_score, away_score, hW_ot, hL_ot);
+    await upsert(away_team_id, aW, aD, aL, aP, away_score, home_score, aW_ot, aL_ot);
   } catch (err) {
     console.error("[SIM] Standings error:", err.message);
   }
@@ -444,148 +376,67 @@ async function updateStandings(match) {
 
 async function runSimulationTick() {
   try {
-    const statsRes = await pool.query(`
-      SELECT status, COUNT(*) as count 
-      FROM matches 
-      WHERE status IN ('live', 'scheduled') 
-      GROUP BY status
-    `);
+    // 1. Запускаем новые сезоны по таймеру
+    const countdownSeasons = await pool.query(
+      "SELECT league_id FROM seasons WHERE status = 'countdown' AND next_season_at <= NOW()"
+    );
+    for (const row of countdownSeasons.rows) {
+      await startNewSeason(row.league_id);
+    }
 
-    let currentLive = 0;
-    let currentScheduled = 0;
+    // 2. Обрабатываем каждую лигу
+    const leaguesRes = await pool.query("SELECT l.id, l.sport_id FROM leagues l");
+    for (const league of leaguesRes.rows) {
+      const leagueId = league.id;
+      const sportId = Number(league.sport_id);
 
-    statsRes.rows.forEach((row) => {
-      if (row.status === "live") currentLive = parseInt(row.count, 10);
-      if (row.status === "scheduled")
-        currentScheduled = parseInt(row.count, 10);
-    });
+      const seasonRes = await pool.query("SELECT status FROM seasons WHERE league_id = $1", [leagueId]);
+      if (seasonRes.rows.length > 0 && seasonRes.rows[0].status === 'countdown') continue;
 
-    const activeTotal = currentLive + currentScheduled;
+      const statsRes = await pool.query(`
+        SELECT status, COUNT(*) as count FROM matches
+        WHERE league_id = $1 AND status IN ('live','scheduled') GROUP BY status
+      `, [leagueId]);
 
-    if (activeTotal < 25) {
-      if (Math.random() < 0.5) {
-        const nextTotal = activeTotal + 1;
+      let live = 0, sched = 0;
+      statsRes.rows.forEach(r => {
+        if (r.status === "live") live = parseInt(r.count, 10);
+        if (r.status === "scheduled") sched = parseInt(r.count, 10);
+      });
 
-        const currentLiveRatio = nextTotal > 0 ? currentLive / nextTotal : 0;
+      if (live + sched < 3 && Math.random() < 0.6) {
+        await generateRoundRobinMatch(leagueId, sportId);
+      }
 
-        let targetStatus = "scheduled";
-
-        if (currentLiveRatio < 0.3) {
-          targetStatus = "live";
-        } else if ((currentLive + 1) / nextTotal <= 0.7) {
-          targetStatus = Math.random() < 0.4 ? "live" : "scheduled";
+      const ready = await pool.query(
+        "SELECT id FROM matches WHERE league_id = $1 AND status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
+        [leagueId]
+      );
+      for (const m of ready.rows) {
+        const total = live + sched;
+        if (total === 0 || (live + 1) / total <= 0.7) {
+          await pool.query("UPDATE matches SET status = 'live', updated_at = NOW() WHERE id = $1", [m.id]);
+          live++; sched--;
         } else {
-          targetStatus = "scheduled";
+          await pool.query("UPDATE matches SET start_time = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1", [m.id]);
         }
-
-        await generateRandomMatch(targetStatus);
       }
     }
 
-    const readyToLiveRes = await pool.query(
-      "SELECT id FROM matches WHERE status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
-    );
-
-    let tempLiveCount = currentLive;
-    let tempScheduledCount = currentScheduled;
-
-    for (const matchRow of readyToLiveRes.rows) {
-      const totalActiveNow = tempLiveCount + tempScheduledCount;
-      const futureLiveRatio =
-        totalActiveNow > 0 ? (tempLiveCount + 1) / totalActiveNow : 0;
-
-      if (futureLiveRatio <= 0.7) {
-        await pool.query(
-          "UPDATE matches SET status = 'live', updated_at = NOW() WHERE id = $1",
-          [matchRow.id],
-        );
-        tempLiveCount++;
-        tempScheduledCount--;
-      } else {
-        await pool.query(
-          "UPDATE matches SET start_time = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1",
-          [matchRow.id],
-        );
-        console.log(
-          `[SIM][ЗАЩИТА] Старт матча ID ${matchRow.id} отложен на 2 мин: превышен лимит LIVE (70%)`,
-        );
-      }
-    }
-
-    const liveMatches = await pool.query(
-      "SELECT * FROM matches WHERE status = 'live'",
-    );
+    // 3. Тикаем live матчи
+    const liveMatches = await pool.query("SELECT * FROM matches WHERE status = 'live'");
     for (const match of liveMatches.rows) {
       await tickMatch(match);
+    }
+
+    // 4. Глобальная чистка
+    const countRes = await pool.query("SELECT COUNT(*) FROM matches");
+    if (parseInt(countRes.rows[0].count, 10) >= 100) {
+      await pool.query(`DELETE FROM matches WHERE id IN (SELECT id FROM matches WHERE status='finished' ORDER BY updated_at ASC LIMIT 30)`);
     }
   } catch (err) {
     console.error("[SIM] Tick error:", err.message);
   }
-}
-
-
-function runAiPredictEngine(teamsFromDb, sportId) {
-  let rotation = [...teamsFromDb];
-  
-  // Добавляем заглушку, если число команд нечётное
-  if (rotation.length % 2 !== 0) {
-    rotation.push({ id: null, name: "Bye", rating: 0, points: 0 });
-  }
-
-  const numTeams = rotation.length;
-  const rounds = numTeams - 1;
-  let firstCircle = [];
-
-  // Генерация кругов по системе Round-Robin (каждый с каждым)
-  for (let round = 0; round < rounds; round++) {
-    for (let i = 0; i < numTeams / 2; i++) {
-      const home = rotation[i];
-      const away = rotation[numTeams - 1 - i];
-      if (home.id !== null && away.id !== null) {
-        firstCircle.push({ homeId: home.id, homeName: home.name, awayId: away.id, awayName: away.name });
-      }
-    }
-    rotation.splice(1, 0, rotation.pop());
-  }
-
-  // Второй круг чемпионата (смена сторон)
-  let secondCircle = firstCircle.map(m => ({ homeId: m.awayId, homeName: m.awayName, awayId: m.homeId, awayName: m.homeName }));
-  const fullCalendar = [...firstCircle, ...secondCircle];
-
-  // Создаем таблицу результатов в оперативной памяти бэкенда
-  let simulatedTable = teamsFromDb.map(t => ({
-    id: t.id,
-    name: t.name,
-    points: parseInt(t.points) || 0,
-    rating: parseInt(t.rating) || 50
-  }));
-
-  // Пробегаемся по матчам в памяти и симулируем исходы с весами рейтинга
-  fullCalendar.forEach(match => {
-    const home = simulatedTable.find(t => t.id === match.homeId);
-    const away = simulatedTable.find(t => t.id === match.awayId);
-    if (!home || !away) return;
-
-    // Считаем силу на основе рейтинга команды + рандом
-    const homePower = home.rating + Math.random() * 20 + 4; // +4 очка за домашнее поле
-    const awayPower = away.rating + Math.random() * 20;
-
-    // Начисление очков по правилам футбола/хоккея/баскетбола
-    if (sportId === 1) { // Футбол
-      if (homePower > awayPower + 4) home.points += 3;
-      else if (awayPower > homePower + 4) away.points += 3;
-      else { home.points += 1; away.points += 1; }
-    } else if (sportId === 2) { // Хоккей (без чистых ничьих)
-      if (homePower > awayPower) home.points += 2;
-      else away.points += 2;
-    } else { // Баскетбол (простая победа/поражение)
-      if (homePower > awayPower) home.points += 1;
-      else away.points += 1;
-    }
-  });
-
-  // Возвращаем отсортированную таблицу прогноза
-  return simulatedTable.sort((a, b) => b.points - a.points);
 }
 
 let simulationInterval = null;
@@ -593,22 +444,15 @@ let simulationInterval = null;
 function startSimulation() {
   if (simulationInterval) return;
   simulationInterval = setInterval(runSimulationTick, 10000);
-  console.log(
-    "[SIM] Multi-sport simulation started (Limit: 25, Balance: 30%-70%)",
-  );
+  console.log("[SIM] Round-Robin simulation started");
 }
 
 function stopSimulation() {
   if (simulationInterval) {
     clearInterval(simulationInterval);
     simulationInterval = null;
-    console.log("[SIM] Multi-sport simulation stopped by Admin");
+    console.log("[SIM] Simulation stopped");
   }
 }
 
-module.exports = {
-  startSimulation,
-  stopSimulation,
-  runAiPredictEngine, 
-  isRunning: () => simulationInterval !== null,
-};
+module.exports = { startSimulation, stopSimulation, isRunning: () => simulationInterval !== null };

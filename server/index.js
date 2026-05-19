@@ -4,6 +4,7 @@ const cors = require("cors");
 const session = require("express-session");
 const pool = require("./db/pool");
 const simulation = require("./simulation/engine");
+const { migrate } = require("./db/migrate");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,6 +34,7 @@ app.use("/api/leagues", require("./routes/leagues"));
 app.use("/api/teams", require("./routes/teams"));
 app.use("/api/user", require("./routes/user"));
 app.use("/api/admin", require("./routes/admin"));
+app.use("/api/ai", require("./routes/ai"));
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -57,5 +59,6 @@ app.listen(PORT, async () => {
     console.error("Database connection failed:", err.message);
   }
 
+  await migrate();
   simulation.startSimulation();
 });

@@ -1,19 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  ActivityIndicator,
-  TouchableOpacity,
-  ScrollView,
-  Animated,
-  StatusBar,
-  Alert,
-  Modal,
+  View, Text, FlatList, StyleSheet, ActivityIndicator,
+  TouchableOpacity, ScrollView, Animated, StatusBar, Alert,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { getLeagues, getStandings, adminDeleteTeam, getMe } from "../api/api";
+import {
+  getLeagues, getStandings, adminDeleteTeam, getMe,
+  getAIPrediction, refreshAIPrediction, getSeasonData,
+} from "../api/api";
 
 const SPORTS = [
   { id: 1, name: "Футбол", icon: "⚽️" },
@@ -22,154 +16,223 @@ const SPORTS = [
 ];
 
 function getZoneColor(index, total, sportId) {
-  const position = index + 1;
-
+  const p = index + 1;
   if (sportId === 1) {
-    if (position <= 4) return "#00c853";
-    if (position === 5 || position === 6) return "#1e88e5";
-    if (position > total - 3) return "#ef5350";
+    if (p <= 4) return "#00c853";
+    if (p === 5 || p === 6) return "#1e88e5";
+    if (p > total - 3) return "#ef5350";
     return "transparent";
   }
-
   if (sportId === 2 || sportId === 3) {
-    if (position <= 8) return "#00c853";
+    if (p <= 8) return "#00c853";
     return "transparent";
   }
-
   return "transparent";
 }
 
-function RowItem({
-  item,
-  index,
-  total,
-  sportId,
-  maxPoints,
-  onDelete,
-  isAdmin,
-}) {
+// ───── Countdown timer component ─────
+function SeasonCountdown({ nextSeasonAt, onSeasonStart }) {
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    if (!nextSeasonAt) return;
+    const target = new Date(nextSeasonAt).getTime();
+
+    const update = () => {
+      const diff = Math.max(0, Math.floor((target - Date.now()) / 1000));
+      setSecondsLeft(diff);
+      if (diff === 0 && onSeasonStart) onSeasonStart();
+    };
+
+    update();
+    const iv = setInterval(update, 1000);
+    return () => clearInterval(iv);
+  }, [nextSeasonAt]);
+
+  const m = Math.floor(secondsLeft / 60);
+  const s = secondsLeft % 60;
+  const label = `${m}:${String(s).padStart(2, "0")}`;
+
+  return (
+    <View style={styles.countdownBox}>
+      <Text style={styles.countdownTitle}>🏆 Сезон завершён!</Text>
+      <Text style={styles.countdownSub}>Новый сезон начнётся через</Text>
+      <Text style={styles.countdownTimer}>{label}</Text>
+    </View>
+  );
+}
+
+// ───── AI Prediction Panel ─────
+function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, onSeasonStart }) {
+  const [prediction, setPrediction] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const fetchPrediction = useCallback(async () => {
+    if (!leagueId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await getAIPrediction(leagueId);
+      setPrediction(res.data);
+    } catch (e) {
+      setError("Не удалось получить прогноз");
+    } finally {
+      setLoading(false);
+    }
+  }, [leagueId]);
+
+  useEffect(() => {
+    fetchPrediction();
+  }, [leagueId]);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await refreshAIPrediction(leagueId);
+      await fetchPrediction();
+    } catch {
+      setLoading(false);
+    }
+  };
+
+  const isCountdown = seasonStatus === "countdown";
+
+  return (
+    <View style={styles.aiPanel}>
+      {/* Действующий чемпион */}
+      <View style={styles.champRow}>
+        <Text style={styles.champIcon}>🥇</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.champLabel}>Действующий чемпион</Text>
+          <Text style={styles.champName}>{champName || "—"}</Text>
+        </View>
+      </View>
+
+      {/* Обратный отсчёт или прогноз ИИ */}
+      {isCountdown ? (
+        <SeasonCountdown nextSeasonAt={nextSeasonAt} onSeasonStart={onSeasonStart} />
+      ) : (
+        <View style={styles.predictionSection}>
+          <View style={styles.predHeader}>
+            <View style={styles.predTitleRow}>
+              <Text style={styles.predIcon}>🤖</Text>
+              <Text style={styles.predTitle}>Прогноз ИИ</Text>
+            </View>
+            <TouchableOpacity onPress={handleRefresh} disabled={loading} style={styles.refreshBtn}>
+              <Text style={styles.refreshBtnText}>{loading ? "⏳" : "🔄"}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loading && !prediction ? (
+            <View style={styles.predLoading}>
+              <ActivityIndicator color="#7c3aed" size="small" />
+              <Text style={styles.predLoadingText}>Gemini анализирует...</Text>
+            </View>
+          ) : error ? (
+            <Text style={styles.predError}>{error}</Text>
+          ) : prediction ? (
+            <View>
+              {prediction.champion ? (
+                <View style={styles.predChamp}>
+                  <Text style={styles.predChampLabel}>Прогнозируемый победитель</Text>
+                  <Text style={styles.predChampName}>{prediction.champion}</Text>
+                  {prediction.confidence != null && (
+                    <View style={styles.confRow}>
+                      <View style={styles.confBar}>
+                        <View style={[styles.confFill, { width: `${prediction.confidence}%` }]} />
+                      </View>
+                      <Text style={styles.confText}>{prediction.confidence}%</Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+
+              {prediction.top3?.length > 1 && (
+                <TouchableOpacity onPress={() => setExpanded(!expanded)} style={styles.expandBtn}>
+                  <Text style={styles.expandBtnText}>{expanded ? "▲ Скрыть" : "▼ Топ-3 и обоснование"}</Text>
+                </TouchableOpacity>
+              )}
+
+              {expanded && (
+                <View style={styles.expandedContent}>
+                  {prediction.top3?.length > 0 && (
+                    <View style={styles.top3}>
+                      {prediction.top3.map((name, i) => (
+                        <View key={i} style={styles.top3Item}>
+                          <Text style={styles.top3Medal}>{["🥇","🥈","🥉"][i]}</Text>
+                          <Text style={styles.top3Name}>{name}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  {prediction.reasoning ? (
+                    <Text style={styles.reasoning}>{prediction.reasoning}</Text>
+                  ) : null}
+                </View>
+              )}
+            </View>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ───── Row ─────
+function RowItem({ item, index, total, sportId, maxPoints, onDelete, isAdmin }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(15)).current;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 250,
-        delay: index * 35,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 250,
-        delay: index * 35,
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 250, delay: index * 35, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 250, delay: index * 35, useNativeDriver: true }),
     ]).start();
-  }, [index, fadeAnim, slideAnim]);
+  }, [index]);
 
   const zoneColor = getZoneColor(index, total, sportId);
   const goalDiff = (item.goals_for || 0) - (item.goals_against || 0);
   const goalDiffText = goalDiff > 0 ? `+${goalDiff}` : `${goalDiff}`;
-  const goalDiffColor =
-    goalDiff > 0 ? "#00c853" : goalDiff < 0 ? "#ef5350" : "#aaa";
-
+  const goalDiffColor = goalDiff > 0 ? "#00c853" : goalDiff < 0 ? "#ef5350" : "#aaa";
   const winRate = item.played > 0 ? item.wins / item.played : 0;
-  const progressRatio =
-    sportId === 3
-      ? winRate
-      : maxPoints > 0
-        ? (item.points || 0) / maxPoints
-        : 0;
+  const progressRatio = sportId === 3 ? winRate : maxPoints > 0 ? (item.points || 0) / maxPoints : 0;
   const isTop = index === 0;
 
   return (
-    <Animated.View
-      style={[
-        styles.row,
-        index % 2 === 0 && styles.rowAlt,
-        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-      ]}
-    >
+    <Animated.View style={[styles.row, index % 2 === 0 && styles.rowAlt, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
       <View style={[styles.zoneStripe, { backgroundColor: zoneColor }]} />
-
       <View style={styles.posContainer}>
-        <Text style={[styles.pos, isTop && { color: "#ffd700" }]}>
-          {index + 1}
-        </Text>
+        <Text style={[styles.pos, isTop && { color: "#ffd700" }]}>{index + 1}</Text>
       </View>
-
       <View style={[styles.teamContainer, isAdmin && { marginRight: 4 }]}>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 4,
-          }}
-        >
-          <Text
-            style={[styles.teamName, isTop && { color: "#ffd700" }]}
-            numberOfLines={1}
-          >
-            {item.team_name}
-          </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+          <Text style={[styles.teamName, isTop && { color: "#ffd700" }]} numberOfLines={1}>{item.team_name}</Text>
           {isAdmin && (
-            <TouchableOpacity
-              onPress={() => onDelete(item.team_id, item.team_name)}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
+            <TouchableOpacity onPress={() => onDelete(item.team_id, item.team_name)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Text style={styles.deleteBtnIcon}>❌</Text>
             </TouchableOpacity>
           )}
         </View>
         <View style={styles.progressBg}>
-          <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${progressRatio * 100}%`,
-                backgroundColor:
-                  zoneColor !== "transparent" ? zoneColor : "#333",
-              },
-            ]}
-          />
+          <View style={[styles.progressFill, { width: `${progressRatio * 100}%`, backgroundColor: zoneColor !== "transparent" ? zoneColor : "#333" }]} />
         </View>
       </View>
-
       <Text style={styles.statCol}>{item.played ?? 0}</Text>
       <Text style={styles.statCol}>{item.wins ?? 0}</Text>
-
       {sportId === 1 && <Text style={styles.statCol}>{item.draws ?? 0}</Text>}
-
-      {sportId === 2 && (
-        <>
-          <Text style={styles.statCol}>{item.wins_ot ?? 0}</Text>
-          <Text style={styles.statCol}>{item.losses_ot ?? 0}</Text>
-        </>
-      )}
-
+      {sportId === 2 && (<><Text style={styles.statCol}>{item.wins_ot ?? 0}</Text><Text style={styles.statCol}>{item.losses_ot ?? 0}</Text></>)}
       <Text style={styles.statCol}>{item.losses ?? 0}</Text>
-
-      <Text style={[styles.statCol, { color: goalDiffColor }]}>
-        {goalDiffText}
-      </Text>
-
-      <Text
-        style={[
-          styles.statCol,
-          styles.pointsCol,
-          sportId === 3 && { width: 40 },
-        ]}
-      >
-        {sportId === 3
-          ? winRate.toFixed(3).replace(/^0/, "")
-          : (item.points ?? 0)}
+      <Text style={[styles.statCol, { color: goalDiffColor }]}>{goalDiffText}</Text>
+      <Text style={[styles.statCol, styles.pointsCol, sportId === 3 && { width: 40 }]}>
+        {sportId === 3 ? winRate.toFixed(3).replace(/^0/, "") : (item.points ?? 0)}
       </Text>
     </Animated.View>
   );
 }
 
+// ───── Main Screen ─────
 export default function StandingsScreen() {
   const [leagues, setLeagues] = useState([]);
   const [selectedSportId, setSelectedSportId] = useState(1);
@@ -177,175 +240,109 @@ export default function StandingsScreen() {
   const [standings, setStandings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [seasonData, setSeasonData] = useState(null);
+  const seasonPollRef = useRef(null);
 
-  // СТЕЙТЫ ДЛЯ РАБОТЫ С ИИ ПРЕДИКТОРOM
-  const [aiModalVisible, setAiModalVisible] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiResponse, setAiResponse] = useState(null);
-
-  // Проверка прав администратора (строго 1 раз при монтировании)
   useEffect(() => {
-    getMe()
-      .then((res) => {
-        setIsAdmin(res.data && res.data.role === "admin");
-      })
-      .catch(() => setIsAdmin(false));
+    getMe().then(res => setIsAdmin(res.data?.role === "admin")).catch(() => setIsAdmin(false));
   }, []);
 
-  // Фокусный эффект для загрузки лиг и безопасного выставления активной лиги
   useFocusEffect(
     useCallback(() => {
-      getLeagues().then((res) => {
-        const normalized = res.data.map((l) => ({
-          ...l,
-          sport_id: Number(l.sport_id),
-        }));
+      getLeagues().then(res => {
+        const normalized = res.data.map(l => ({ ...l, sport_id: Number(l.sport_id) }));
         setLeagues(normalized);
-
-        // Корректно выбираем или сохраняем текущую лигу без создания бесконечных петель
-        setSelectedLeague((prevSelected) => {
-          if (prevSelected) {
-            const stillExists = normalized.find(
-              (l) => l.id === prevSelected.id,
-            );
-            if (stillExists && stillExists.sport_id === selectedSportId) {
-              return stillExists;
-            }
+        setSelectedLeague(prev => {
+          if (prev) {
+            const still = normalized.find(l => l.id === prev.id);
+            if (still && still.sport_id === selectedSportId) return still;
           }
-          return normalized.find((l) => l.sport_id === selectedSportId) || null;
+          return normalized.find(l => l.sport_id === selectedSportId) || null;
         });
       });
-    }, [selectedSportId]),
+    }, [selectedSportId])
   );
 
-  // Фильтруем лиги прямо во время рендеринга
-  const filteredLeagues = leagues.filter((l) => l.sport_id === selectedSportId);
+  const filteredLeagues = leagues.filter(l => l.sport_id === selectedSportId);
 
-  // Слушатель для автоматического переключения на первую доступную лигу при смене вида спорта
   useEffect(() => {
     if (filteredLeagues.length > 0) {
       if (!selectedLeague || selectedLeague.sport_id !== selectedSportId) {
         setSelectedLeague(filteredLeagues[0]);
       }
-    } else {
-      if (selectedLeague !== null) {
-        setSelectedLeague(null);
-        setStandings([]);
-      }
+    } else if (selectedLeague !== null) {
+      setSelectedLeague(null);
+      setStandings([]);
     }
   }, [selectedSportId, leagues]);
 
-  // Загрузка турнирной таблицы при смене лиги
   useEffect(() => {
-    if (!selectedLeague) {
-      setStandings([]);
-      setLoading(false);
-      return;
-    }
-
+    if (!selectedLeague) { setStandings([]); setLoading(false); return; }
     setLoading(true);
     getStandings(selectedLeague.id)
-      .then((res) => setStandings(res.data))
+      .then(res => setStandings(res.data))
       .catch(() => setStandings([]))
       .finally(() => setLoading(false));
   }, [selectedLeague]);
 
-  // ФУНКЦИЯ ОПРОСА СЕРВЕРНОГО ИИ-АНАЛИТИКА
-  const handleFetchAiPrediction = async () => {
-    // Проверяем, есть ли вообще данные в таблице, которую видит пользователь
-    if (!selectedLeague || standings.length === 0) {
-      Alert.alert("Внимание", "Нет данных лиги для генерации прогноза.");
-      return;
-    }
-
-    setAiLoading(true);
-    setAiModalVisible(true);
-
+  // Polling season data
+  const fetchSeasonData = useCallback(async () => {
+    if (!selectedLeague) return;
     try {
-      const response = await fetch(
-        `http://flashscore-backend-r1js.onrender.com/api/teams/ai-prediction?sportId=${selectedSportId}`,
-        {
-          method: "POST", // Обязательно POST метод
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ teams: standings }), // Передаем актуальную таблицу с очками прямиком в body
-        },
-      );
+      const res = await getSeasonData(selectedLeague.id);
+      setSeasonData(res.data);
+    } catch {}
+  }, [selectedLeague]);
 
-      const data = await response.json();
+  useEffect(() => {
+    fetchSeasonData();
+    if (seasonPollRef.current) clearInterval(seasonPollRef.current);
+    seasonPollRef.current = setInterval(fetchSeasonData, 15000);
+    return () => clearInterval(seasonPollRef.current);
+  }, [selectedLeague]);
 
-      if (response.ok) {
-        setAiResponse(data); // Сюда прилетит красивый JSON { winner, analysis } от Gemini
-      } else {
-        setAiResponse({
-          analysis: data.error || "Произошла ошибка при генерации прогноза.",
-        });
+  const handleSeasonStart = useCallback(() => {
+    // Новый сезон стартовал — обновляем всё
+    setTimeout(() => {
+      fetchSeasonData();
+      if (selectedLeague) {
+        getStandings(selectedLeague.id)
+          .then(res => setStandings(res.data))
+          .catch(() => setStandings([]));
       }
-    } catch (error) {
-      console.error("[FRONT] AI Fetch error:", error);
-      setAiResponse({
-        analysis:
-          "Ошибка соединения с сервером предиктивной аналитики. Проверьте сеть или статус бэкенда.",
-      });
-    } finally {
-      setAiLoading(false);
-    }
-  };
+    }, 3000);
+  }, [selectedLeague]);
 
   const handleDeleteTeam = (teamId, teamName) => {
-    Alert.alert(
-      "Удаление команды",
-      `Вы уверены, что хотите полностью удалить команду "${teamName}" из этой лиги?`,
-      [
-        { text: "Отмена", style: "cancel" },
-        {
-          text: "Удалить",
-          style: "destructive",
-          onPress: () => {
-            adminDeleteTeam(teamId)
-              .then(() => {
-                setStandings((prev) =>
-                  prev.filter((t) => t.team_id !== teamId),
-                );
-              })
-              .catch((err) => {
-                Alert.alert("Ошибка", "Не удалось удалить команду с сервера");
-                console.error(err);
-              });
-          },
-        },
-      ],
-    );
+    Alert.alert("Удаление команды", `Удалить команду "${teamName}"?`, [
+      { text: "Отмена", style: "cancel" },
+      {
+        text: "Удалить", style: "destructive",
+        onPress: () => adminDeleteTeam(teamId)
+          .then(() => setStandings(prev => prev.filter(t => t.team_id !== teamId)))
+          .catch(() => Alert.alert("Ошибка", "Не удалось удалить команду"))
+      }
+    ]);
   };
 
-  const maxPoints =
-    standings.length > 0 ? Math.max(...standings.map((s) => s.points ?? 0)) : 1;
+  const maxPoints = standings.length > 0 ? Math.max(...standings.map(s => s.points ?? 0)) : 1;
 
   const renderLegend = () => {
     if (standings.length === 0) return null;
-
-    let legendItems = [];
+    let items = [];
     if (selectedSportId === 1) {
-      legendItems = [
+      items = [
         { color: "#00c853", label: "Лига чемпионов" },
         { color: "#1e88e5", label: "Лига Европы" },
         { color: "#ef5350", label: "Вылет" },
       ];
-    } else if (selectedSportId === 2 || selectedSportId === 3) {
-      legendItems = [{ color: "#00c853", label: "Зона Плей-офф" }];
+    } else {
+      items = [{ color: "#00c853", label: "Зона Плей-офф" }];
     }
-
-    if (legendItems.length === 0) return null;
-
     return (
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.legendScroll}
-      >
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.legendScroll}>
         <View style={styles.legend}>
-          {legendItems.map((z) => (
+          {items.map(z => (
             <View key={z.label} style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: z.color }]} />
               <Text style={styles.legendText}>{z.label}</Text>
@@ -361,37 +358,24 @@ export default function StandingsScreen() {
       <StatusBar barStyle="light-content" />
 
       <View style={styles.sportSelector}>
-        {SPORTS.map((sport) => (
+        {SPORTS.map(sport => (
           <TouchableOpacity
             key={sport.id}
-            style={[
-              styles.sportBtn,
-              selectedSportId === sport.id && styles.sportBtnActive,
-            ]}
+            style={[styles.sportBtn, selectedSportId === sport.id && styles.sportBtnActive]}
             onPress={() => setSelectedSportId(sport.id)}
           >
             <Text style={styles.sportIcon}>{sport.icon}</Text>
-            <Text
-              style={[
-                styles.sportText,
-                selectedSportId === sport.id && styles.sportTextActive,
-              ]}
-            >
-              {sport.name}
-            </Text>
+            <Text style={[styles.sportText, selectedSportId === sport.id && styles.sportTextActive]}>{sport.name}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
       <View style={styles.leagueRow}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {filteredLeagues.map((l) => (
+          {filteredLeagues.map(l => (
             <TouchableOpacity
               key={l.id}
-              style={[
-                styles.leagueBtn,
-                selectedLeague?.id === l.id && styles.leagueActive,
-              ]}
+              style={[styles.leagueBtn, selectedLeague?.id === l.id && styles.leagueActive]}
               onPress={() => setSelectedLeague(l)}
               activeOpacity={0.7}
             >
@@ -401,18 +385,18 @@ export default function StandingsScreen() {
         </ScrollView>
       </View>
 
-      {renderLegend()}
-
-      {standings.length > 0 && (
-        <TouchableOpacity
-          style={styles.aiButton}
-          onPress={handleFetchAiPrediction}
-        >
-          <Text style={styles.aiButtonText}>
-            🤖 Сгенерировать ИИ-прогноз сезона
-          </Text>
-        </TouchableOpacity>
+      {/* AI + Champion Panel */}
+      {selectedLeague && (
+        <AIPredictionPanel
+          leagueId={selectedLeague.id}
+          champName={seasonData?.champion_name}
+          seasonStatus={seasonData?.status}
+          nextSeasonAt={seasonData?.next_season_at}
+          onSeasonStart={handleSeasonStart}
+        />
       )}
+
+      {renderLegend()}
 
       <View style={styles.tableHeader}>
         <View style={styles.zoneStripe} />
@@ -420,22 +404,12 @@ export default function StandingsScreen() {
         <Text style={styles.teamHeader}>Команда</Text>
         <Text style={styles.statHeader}>И</Text>
         <Text style={styles.statHeader}>В</Text>
-
         {selectedSportId === 1 && <Text style={styles.statHeader}>Н</Text>}
         {selectedSportId === 2 && <Text style={styles.statHeader}>ВО</Text>}
         {selectedSportId === 2 && <Text style={styles.statHeader}>ПО</Text>}
-
         <Text style={styles.statHeader}>П</Text>
         <Text style={styles.statHeader}>±</Text>
-
-        <Text
-          style={[
-            styles.statHeader,
-            styles.pointsCol,
-            { color: "#00c853" },
-            selectedSportId === 3 && { width: 40 },
-          ]}
-        >
+        <Text style={[styles.statHeader, styles.pointsCol, { color: "#00c853" }, selectedSportId === 3 && { width: 40 }]}>
           {selectedSportId === 3 ? "%В" : "О"}
         </Text>
       </View>
@@ -448,77 +422,24 @@ export default function StandingsScreen() {
       ) : (
         <FlatList
           data={standings}
-          keyExtractor={(item) => String(item.id || item.team_id)}
+          keyExtractor={item => String(item.id || item.team_id)}
           renderItem={({ item, index }) => (
             <RowItem
-              item={item}
-              index={index}
-              total={standings.length}
-              sportId={selectedSportId}
-              maxPoints={maxPoints}
-              onDelete={handleDeleteTeam}
-              isAdmin={isAdmin}
+              item={item} index={index} total={standings.length}
+              sportId={selectedSportId} maxPoints={maxPoints}
+              onDelete={handleDeleteTeam} isAdmin={isAdmin}
             />
           )}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <Text style={styles.emptyIcon}>📊</Text>
               <Text style={styles.emptyText}>Нет данных для этой лиги</Text>
-              <Text style={styles.emptyHint}>
-                Данные появятся после завершения матчей
-              </Text>
+              <Text style={styles.emptyHint}>Данные появятся после завершения матчей</Text>
             </View>
           }
           contentContainerStyle={{ paddingBottom: 20 }}
         />
       )}
-
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={aiModalVisible}
-        onRequestClose={() => setAiModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Аналитический ИИ-Прогноз</Text>
-
-            {aiLoading ? (
-              <View style={styles.loadingBox}>
-                <ActivityIndicator size="large" color="#00c853" />
-                <Text style={styles.loadingText}>
-                  ИИ генерирует Round-Robin календарь, симулирует оставшиеся
-                  туры в памяти сервера и формирует спортивную сводку...
-                </Text>
-              </View>
-            ) : (
-              <ScrollView
-                style={styles.scrollContainer}
-                showsVerticalScrollIndicator={false}
-              >
-                {aiResponse?.winner && (
-                  <View style={styles.winnerBadge}>
-                    <Text style={styles.winnerLabel}>
-                      🏆 Потенциальный чемпион:
-                    </Text>
-                    <Text style={styles.winnerName}>{aiResponse.winner}</Text>
-                  </View>
-                )}
-                <Text style={styles.analysisText}>
-                  {aiResponse?.analysis || "Нет доступных данных."}
-                </Text>
-              </ScrollView>
-            )}
-
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setAiModalVisible(false)}
-            >
-              <Text style={styles.closeButtonText}>Закрыть отчет</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -526,180 +447,92 @@ export default function StandingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#1a1a2e" },
   sportSelector: {
-    flex: 1,
-    maxHeight: 65,
-    flexDirection: "row",
-    backgroundColor: "#16213e",
-    paddingVertical: 10,
-    justifyContent: "space-around",
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a4a",
+    flexDirection: "row", backgroundColor: "#16213e",
+    paddingVertical: 10, justifyContent: "space-around",
+    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
   },
   sportBtn: { alignItems: "center", opacity: 0.6, padding: 5 },
-  sportBtnActive: {
-    opacity: 1,
-    borderBottomWidth: 2,
-    borderBottomColor: "#00c853",
-  },
+  sportBtnActive: { opacity: 1, borderBottomWidth: 2, borderBottomColor: "#00c853" },
   sportIcon: { fontSize: 24, marginBottom: 4 },
   sportText: { color: "#fff", fontSize: 12 },
   sportTextActive: { fontWeight: "bold", color: "#00c853" },
-  leagueRow: { paddingHorizontal: 12, marginVertical: 10 },
+  leagueRow: { paddingHorizontal: 12, marginVertical: 8 },
   leagueBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: "#16213e",
-    borderWidth: 1,
-    borderColor: "#444",
-    marginRight: 8,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
+    backgroundColor: "#16213e", borderWidth: 1, borderColor: "#444", marginRight: 8,
   },
   leagueActive: { borderColor: "#00c853" },
   leagueBtnText: { color: "#ccc", fontSize: 11 },
-  legendScroll: { maxHeight: 30, backgroundColor: "#1a1a2e" },
-  legend: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingBottom: 4,
-    gap: 16,
+
+  // AI Panel
+  aiPanel: {
+    marginHorizontal: 12, marginBottom: 8, borderRadius: 12,
+    backgroundColor: "#16213e", borderWidth: 1, borderColor: "#2a2a4a",
+    overflow: "hidden",
   },
+  champRow: {
+    flexDirection: "row", alignItems: "center", padding: 12,
+    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
+  },
+  champIcon: { fontSize: 24, marginRight: 10 },
+  champLabel: { color: "#888", fontSize: 10, marginBottom: 2 },
+  champName: { color: "#ffd700", fontSize: 15, fontWeight: "700" },
+
+  countdownBox: {
+    alignItems: "center", padding: 16,
+    backgroundColor: "#0f0f23",
+  },
+  countdownTitle: { color: "#ffd700", fontSize: 14, fontWeight: "700", marginBottom: 4 },
+  countdownSub: { color: "#888", fontSize: 11, marginBottom: 8 },
+  countdownTimer: { color: "#00c853", fontSize: 32, fontWeight: "900", letterSpacing: 2 },
+
+  predictionSection: { padding: 12 },
+  predHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  predTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  predIcon: { fontSize: 16 },
+  predTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  refreshBtn: { padding: 4 },
+  refreshBtnText: { fontSize: 16 },
+  predLoading: { flexDirection: "row", alignItems: "center", gap: 8 },
+  predLoadingText: { color: "#888", fontSize: 12 },
+  predError: { color: "#ef5350", fontSize: 12 },
+
+  predChamp: { marginBottom: 6 },
+  predChampLabel: { color: "#888", fontSize: 10, marginBottom: 2 },
+  predChampName: { color: "#a78bfa", fontSize: 15, fontWeight: "700" },
+  confRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+  confBar: {
+    flex: 1, height: 4, backgroundColor: "#2a2a4a", borderRadius: 2, overflow: "hidden",
+  },
+  confFill: { height: 4, backgroundColor: "#7c3aed", borderRadius: 2 },
+  confText: { color: "#888", fontSize: 10, width: 32, textAlign: "right" },
+
+  expandBtn: { marginTop: 6 },
+  expandBtnText: { color: "#7c3aed", fontSize: 11 },
+  expandedContent: { marginTop: 8 },
+  top3: { marginBottom: 8 },
+  top3Item: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 3 },
+  top3Medal: { fontSize: 14 },
+  top3Name: { color: "#ccc", fontSize: 12 },
+  reasoning: { color: "#888", fontSize: 11, lineHeight: 16, fontStyle: "italic" },
+
+  legendScroll: { maxHeight: 30, backgroundColor: "#1a1a2e" },
+  legend: { flexDirection: "row", paddingHorizontal: 12, paddingBottom: 4, gap: 16 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { color: "#888", fontSize: 10 },
 
-  // КНОПКА ИИ
-  aiButton: {
-    backgroundColor: "#16213e",
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginHorizontal: 12,
-    marginBottom: 10,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#00c853",
-  },
-  aiButtonText: {
-    color: "#00c853",
-    fontWeight: "bold",
-    fontSize: 13,
-  },
-
-  // МОДАЛЬНОЕ ОКНО СТИЛИ
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    backgroundColor: "#16213e",
-    width: "90%",
-    maxHeight: "75%",
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#2a2a4a",
-  },
-  modalTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 15,
-    textAlign: "center",
-  },
-  loadingBox: {
-    alignItems: "center",
-    marginVertical: 30,
-  },
-  loadingText: {
-    color: "#aaa",
-    marginTop: 15,
-    textAlign: "center",
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  scrollContainer: {
-    marginVertical: 10,
-  },
-  winnerBadge: {
-    backgroundColor: "rgba(0, 200, 83, 0.1)",
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(0, 200, 83, 0.4)",
-    marginBottom: 12,
-    alignItems: "center",
-  },
-  winnerLabel: {
-    color: "#aaa",
-    fontSize: 12,
-  },
-  winnerName: {
-    color: "#00c853",
-    fontSize: 16,
-    fontWeight: "bold",
-    marginTop: 2,
-  },
-  analysisText: {
-    color: "#ddd",
-    fontSize: 14,
-    lineHeight: 22,
-    textAlign: "left",
-  },
-  closeButton: {
-    backgroundColor: "#2a2a4a",
-    paddingVertical: 12,
-    borderRadius: 10,
-    marginTop: 10,
-    alignItems: "center",
-  },
-  closeButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
-
   tableHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#16213e",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a4a",
+    flexDirection: "row", alignItems: "center", backgroundColor: "#16213e",
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
   },
-  posHeader: {
-    width: 28,
-    color: "#aaa",
-    fontSize: 11,
-    textAlign: "center",
-    fontWeight: "700",
-  },
-  teamHeader: {
-    flex: 1,
-    color: "#aaa",
-    fontSize: 11,
-    fontWeight: "700",
-    paddingLeft: 4,
-  },
-  statHeader: {
-    width: 30,
-    color: "#aaa",
-    fontSize: 11,
-    textAlign: "center",
-    fontWeight: "700",
-  },
-  zoneStripe: {
-    width: 3,
-    alignSelf: "stretch",
-    marginRight: 3,
-    borderRadius: 2,
-  },
+  posHeader: { width: 28, color: "#aaa", fontSize: 11, textAlign: "center", fontWeight: "700" },
+  teamHeader: { flex: 1, color: "#aaa", fontSize: 11, fontWeight: "700", paddingLeft: 4 },
+  statHeader: { width: 30, color: "#aaa", fontSize: 11, textAlign: "center", fontWeight: "700" },
+  zoneStripe: { width: 3, alignSelf: "stretch", marginRight: 3, borderRadius: 2 },
   row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2a4a",
+    flexDirection: "row", alignItems: "center", paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
   },
   rowAlt: { backgroundColor: "#16213e" },
   posContainer: { width: 28, alignItems: "center" },
@@ -707,17 +540,10 @@ const styles = StyleSheet.create({
   teamContainer: { flex: 1, paddingLeft: 4, paddingRight: 6 },
   teamName: { color: "#fff", fontSize: 13, fontWeight: "600", flex: 1 },
   deleteBtnIcon: { fontSize: 11, opacity: 0.8, paddingHorizontal: 4 },
-  progressBg: {
-    height: 2,
-    backgroundColor: "#2a2a4a",
-    borderRadius: 1,
-    marginTop: 4,
-    overflow: "hidden",
-  },
+  progressBg: { height: 2, backgroundColor: "#2a2a4a", borderRadius: 1, marginTop: 4, overflow: "hidden" },
   progressFill: { height: 2, borderRadius: 1 },
   statCol: { width: 30, color: "#aaa", fontSize: 12, textAlign: "center" },
   pointsCol: { width: 30, color: "#fff", fontWeight: "800" },
-
   loaderWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
   loaderText: { color: "#aaa", marginTop: 12, fontSize: 13 },
   emptyWrap: { alignItems: "center", paddingTop: 60 },
