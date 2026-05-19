@@ -35,7 +35,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// РОУТ ДЛЯ ИИ-ПРОГНОЗА НА ГАЗУ GEMINI
+// ИСПРАВЛЕННЫЙ РОУТ ДЛЯ ИИ-ПРОГНОЗА (GOOGLE GEMINI API)
 router.post("/ai-prediction", async (req, res) => {
   try {
     // Получаем sportId из query, а готовые команды — из тела запроса (body)
@@ -137,7 +137,7 @@ router.post("/ai-prediction", async (req, res) => {
     Твоя задача — написать яркий, экспертный разбор итогов. Назови чемпиона, выдели главные сенсации (кто прыгнул выше головы) и главные провалы сезона. 
     Пиши живым языком, как пишут в спортивных медиа. Не используй сухие штампы.
     
-    Ты обязан вернуть ответ строго в формате JSON:
+    Ты обязан вернуть ответ строго в формате JSON схемы:
     {
       "winner": "Точное название команды-чемпиона",
       "analysis": "Твой развернутый аналитический текст на русском языке..."
@@ -145,7 +145,7 @@ router.post("/ai-prediction", async (req, res) => {
 
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
-    // Эндпоинт для работы с моделью gemini-1.5-flash
+    // Стабильный URL-эндпоинт для gemini-1.5-flash
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
 
     // Запрос к Google Gemini API
@@ -158,7 +158,8 @@ router.post("/ai-prediction", async (req, res) => {
           },
         ],
         generationConfig: {
-          responseMimeType: "application/json", // Принудительно требуем JSON на выходе
+          // ИСПРАВЛЕНО: Для v1beta пишется через нижнее подчеркивание!
+          response_mime_type: "application/json",
           temperature: 0.6,
         },
       },
@@ -172,10 +173,11 @@ router.post("/ai-prediction", async (req, res) => {
     // Достаем текст ответа из структуры ответа Google API
     const textResponse = response.data.candidates[0].content.parts[0].text;
 
-    // Парсим в JSON и выплевываем на фронтенд
+    // Парсим в JSON и отправляем на фронтенд
     const aiData = JSON.parse(textResponse);
     return res.status(200).json(aiData);
   } catch (error) {
+    // Выводим развернутый ответ от Google API в консоль, если что-то пойдет не так
     console.error("AI Route Error:", error?.response?.data || error.message);
     return res
       .status(500)
