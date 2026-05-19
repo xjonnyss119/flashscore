@@ -48,9 +48,20 @@ router.get("/prediction/:leagueId", async (req, res) => {
 
       if (ai_prediction && cacheAge < 60 * 60 * 1000) {
         try {
-          return res.json(JSON.parse(ai_prediction));
+          let parsed = JSON.parse(ai_prediction);
+          // Защита от двойной сериализации: если внутри снова строка — парсим ещё раз
+          if (typeof parsed === "string") parsed = JSON.parse(parsed);
+          // Если объект не содержит нужных полей — считаем кэш битым
+          if (!parsed || typeof parsed !== "object" || !parsed.champion) {
+            throw new Error("invalid cache structure");
+          }
+          return res.json(parsed);
         } catch {
-          return res.json({ prediction: ai_prediction });
+          // Битый кэш — сбрасываем и идём к Gemini
+          await pool.query(
+            "UPDATE seasons SET ai_prediction = NULL, ai_prediction_updated = NULL WHERE league_id = $1",
+            [leagueId]
+          );
         }
       }
     }
@@ -152,6 +163,18 @@ ${standingsText}
   } catch (err) {
     console.error("[AI] Prediction error:", err.message);
     res.status(500).json({ error: "Ошибка получения прогноза ИИ: " + err.message });
+  }
+});
+
+// POST /api/ai/prediction/reset-all — сбрасывает кэш всех лиг (для починки битых данных)
+router.post("/prediction/reset-all", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE seasons SET ai_prediction = NULL, ai_prediction_updated = NULL"
+    );
+    res.json({ success: true, message: `Кэш сброшен для ${result.rowCount} лиг` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

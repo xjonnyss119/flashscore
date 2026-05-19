@@ -1,12 +1,25 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  View, Text, FlatList, StyleSheet, ActivityIndicator,
-  TouchableOpacity, ScrollView, Animated, StatusBar, Alert,
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
+  ScrollView,
+  Animated,
+  StatusBar,
+  Alert,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import {
-  getLeagues, getStandings, adminDeleteTeam, getMe,
-  getAIPrediction, refreshAIPrediction, getSeasonData,
+  getLeagues,
+  getStandings,
+  adminDeleteTeam,
+  getMe,
+  getAIPrediction,
+  refreshAIPrediction,
+  getSeasonData,
 } from "../api/api";
 
 const SPORTS = [
@@ -63,7 +76,13 @@ function SeasonCountdown({ nextSeasonAt, onSeasonStart }) {
 }
 
 // ───── AI Prediction Panel ─────
-function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, onSeasonStart }) {
+function AIPredictionPanel({
+  leagueId,
+  champName,
+  seasonStatus,
+  nextSeasonAt,
+  onSeasonStart,
+}) {
   const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -75,7 +94,16 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
     setError(null);
     try {
       const res = await getAIPrediction(leagueId);
-      setPrediction(res.data);
+      let data = res.data;
+      // Защита на случай если сервер вернул строку вместо объекта
+      if (typeof data === "string") {
+        try { data = JSON.parse(data); } catch {}
+      }
+      // Если пришёл fallback { prediction: "строка" } — пробуем распарсить
+      if (data && typeof data.prediction === "string" && !data.champion) {
+        try { data = JSON.parse(data.prediction); } catch {}
+      }
+      setPrediction(data);
     } catch (e) {
       setError("Не удалось получить прогноз");
     } finally {
@@ -88,11 +116,14 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
   }, [leagueId]);
 
   const handleRefresh = async () => {
+    if (loading) return;
     setLoading(true);
+    setError(null);
     try {
       await refreshAIPrediction(leagueId);
       await fetchPrediction();
     } catch {
+      setError("Не удалось обновить прогноз");
       setLoading(false);
     }
   };
@@ -112,7 +143,10 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
 
       {/* Обратный отсчёт или прогноз ИИ */}
       {isCountdown ? (
-        <SeasonCountdown nextSeasonAt={nextSeasonAt} onSeasonStart={onSeasonStart} />
+        <SeasonCountdown
+          nextSeasonAt={nextSeasonAt}
+          onSeasonStart={onSeasonStart}
+        />
       ) : (
         <View style={styles.predictionSection}>
           <View style={styles.predHeader}>
@@ -120,7 +154,11 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
               <Text style={styles.predIcon}>🤖</Text>
               <Text style={styles.predTitle}>Прогноз ИИ</Text>
             </View>
-            <TouchableOpacity onPress={handleRefresh} disabled={loading} style={styles.refreshBtn}>
+            <TouchableOpacity
+              onPress={handleRefresh}
+              disabled={loading}
+              style={styles.refreshBtn}
+            >
               <Text style={styles.refreshBtnText}>{loading ? "⏳" : "🔄"}</Text>
             </TouchableOpacity>
           </View>
@@ -136,22 +174,38 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
             <View>
               {prediction.champion ? (
                 <View style={styles.predChamp}>
-                  <Text style={styles.predChampLabel}>Прогнозируемый победитель</Text>
-                  <Text style={styles.predChampName}>{prediction.champion}</Text>
+                  <Text style={styles.predChampLabel}>
+                    Прогнозируемый победитель
+                  </Text>
+                  <Text style={styles.predChampName}>
+                    {prediction.champion}
+                  </Text>
                   {prediction.confidence != null && (
                     <View style={styles.confRow}>
                       <View style={styles.confBar}>
-                        <View style={[styles.confFill, { width: `${prediction.confidence}%` }]} />
+                        <View
+                          style={[
+                            styles.confFill,
+                            { width: `${prediction.confidence}%` },
+                          ]}
+                        />
                       </View>
-                      <Text style={styles.confText}>{prediction.confidence}%</Text>
+                      <Text style={styles.confText}>
+                        {prediction.confidence}%
+                      </Text>
                     </View>
                   )}
                 </View>
               ) : null}
 
               {prediction.top3?.length > 1 && (
-                <TouchableOpacity onPress={() => setExpanded(!expanded)} style={styles.expandBtn}>
-                  <Text style={styles.expandBtnText}>{expanded ? "▲ Скрыть" : "▼ Топ-3 и обоснование"}</Text>
+                <TouchableOpacity
+                  onPress={() => setExpanded(!expanded)}
+                  style={styles.expandBtn}
+                >
+                  <Text style={styles.expandBtnText}>
+                    {expanded ? "▲ Скрыть" : "▼ Топ-3 и обоснование"}
+                  </Text>
                 </TouchableOpacity>
               )}
 
@@ -161,7 +215,9 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
                     <View style={styles.top3}>
                       {prediction.top3.map((name, i) => (
                         <View key={i} style={styles.top3Item}>
-                          <Text style={styles.top3Medal}>{["🥇","🥈","🥉"][i]}</Text>
+                          <Text style={styles.top3Medal}>
+                            {["🥇", "🥈", "🥉"][i]}
+                          </Text>
                           <Text style={styles.top3Name}>{name}</Text>
                         </View>
                       ))}
@@ -181,52 +237,123 @@ function AIPredictionPanel({ leagueId, champName, seasonStatus, nextSeasonAt, on
 }
 
 // ───── Row ─────
-function RowItem({ item, index, total, sportId, maxPoints, onDelete, isAdmin }) {
+function RowItem({
+  item,
+  index,
+  total,
+  sportId,
+  maxPoints,
+  onDelete,
+  isAdmin,
+}) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(15)).current;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 250, delay: index * 35, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 250, delay: index * 35, useNativeDriver: true }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 250,
+        delay: index * 35,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 250,
+        delay: index * 35,
+        useNativeDriver: true,
+      }),
     ]).start();
   }, [index]);
 
   const zoneColor = getZoneColor(index, total, sportId);
   const goalDiff = (item.goals_for || 0) - (item.goals_against || 0);
   const goalDiffText = goalDiff > 0 ? `+${goalDiff}` : `${goalDiff}`;
-  const goalDiffColor = goalDiff > 0 ? "#00c853" : goalDiff < 0 ? "#ef5350" : "#aaa";
+  const goalDiffColor =
+    goalDiff > 0 ? "#00c853" : goalDiff < 0 ? "#ef5350" : "#aaa";
   const winRate = item.played > 0 ? item.wins / item.played : 0;
-  const progressRatio = sportId === 3 ? winRate : maxPoints > 0 ? (item.points || 0) / maxPoints : 0;
+  const progressRatio =
+    sportId === 3
+      ? winRate
+      : maxPoints > 0
+        ? (item.points || 0) / maxPoints
+        : 0;
   const isTop = index === 0;
 
   return (
-    <Animated.View style={[styles.row, index % 2 === 0 && styles.rowAlt, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+    <Animated.View
+      style={[
+        styles.row,
+        index % 2 === 0 && styles.rowAlt,
+        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+      ]}
+    >
       <View style={[styles.zoneStripe, { backgroundColor: zoneColor }]} />
       <View style={styles.posContainer}>
-        <Text style={[styles.pos, isTop && { color: "#ffd700" }]}>{index + 1}</Text>
+        <Text style={[styles.pos, isTop && { color: "#ffd700" }]}>
+          {index + 1}
+        </Text>
       </View>
       <View style={[styles.teamContainer, isAdmin && { marginRight: 4 }]}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-          <Text style={[styles.teamName, isTop && { color: "#ffd700" }]} numberOfLines={1}>{item.team_name}</Text>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 4,
+          }}
+        >
+          <Text
+            style={[styles.teamName, isTop && { color: "#ffd700" }]}
+            numberOfLines={1}
+          >
+            {item.team_name}
+          </Text>
           {isAdmin && (
-            <TouchableOpacity onPress={() => onDelete(item.team_id, item.team_name)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <TouchableOpacity
+              onPress={() => onDelete(item.team_id, item.team_name)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
               <Text style={styles.deleteBtnIcon}>❌</Text>
             </TouchableOpacity>
           )}
         </View>
         <View style={styles.progressBg}>
-          <View style={[styles.progressFill, { width: `${progressRatio * 100}%`, backgroundColor: zoneColor !== "transparent" ? zoneColor : "#333" }]} />
+          <View
+            style={[
+              styles.progressFill,
+              {
+                width: `${progressRatio * 100}%`,
+                backgroundColor:
+                  zoneColor !== "transparent" ? zoneColor : "#333",
+              },
+            ]}
+          />
         </View>
       </View>
       <Text style={styles.statCol}>{item.played ?? 0}</Text>
       <Text style={styles.statCol}>{item.wins ?? 0}</Text>
       {sportId === 1 && <Text style={styles.statCol}>{item.draws ?? 0}</Text>}
-      {sportId === 2 && (<><Text style={styles.statCol}>{item.wins_ot ?? 0}</Text><Text style={styles.statCol}>{item.losses_ot ?? 0}</Text></>)}
+      {sportId === 2 && (
+        <>
+          <Text style={styles.statCol}>{item.wins_ot ?? 0}</Text>
+          <Text style={styles.statCol}>{item.losses_ot ?? 0}</Text>
+        </>
+      )}
       <Text style={styles.statCol}>{item.losses ?? 0}</Text>
-      <Text style={[styles.statCol, { color: goalDiffColor }]}>{goalDiffText}</Text>
-      <Text style={[styles.statCol, styles.pointsCol, sportId === 3 && { width: 40 }]}>
-        {sportId === 3 ? winRate.toFixed(3).replace(/^0/, "") : (item.points ?? 0)}
+      <Text style={[styles.statCol, { color: goalDiffColor }]}>
+        {goalDiffText}
+      </Text>
+      <Text
+        style={[
+          styles.statCol,
+          styles.pointsCol,
+          sportId === 3 && { width: 40 },
+        ]}
+      >
+        {sportId === 3
+          ? winRate.toFixed(3).replace(/^0/, "")
+          : (item.points ?? 0)}
       </Text>
     </Animated.View>
   );
@@ -244,26 +371,31 @@ export default function StandingsScreen() {
   const seasonPollRef = useRef(null);
 
   useEffect(() => {
-    getMe().then(res => setIsAdmin(res.data?.role === "admin")).catch(() => setIsAdmin(false));
+    getMe()
+      .then((res) => setIsAdmin(res.data?.role === "admin"))
+      .catch(() => setIsAdmin(false));
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      getLeagues().then(res => {
-        const normalized = res.data.map(l => ({ ...l, sport_id: Number(l.sport_id) }));
+      getLeagues().then((res) => {
+        const normalized = res.data.map((l) => ({
+          ...l,
+          sport_id: Number(l.sport_id),
+        }));
         setLeagues(normalized);
-        setSelectedLeague(prev => {
+        setSelectedLeague((prev) => {
           if (prev) {
-            const still = normalized.find(l => l.id === prev.id);
+            const still = normalized.find((l) => l.id === prev.id);
             if (still && still.sport_id === selectedSportId) return still;
           }
-          return normalized.find(l => l.sport_id === selectedSportId) || null;
+          return normalized.find((l) => l.sport_id === selectedSportId) || null;
         });
       });
-    }, [selectedSportId])
+    }, [selectedSportId]),
   );
 
-  const filteredLeagues = leagues.filter(l => l.sport_id === selectedSportId);
+  const filteredLeagues = leagues.filter((l) => l.sport_id === selectedSportId);
 
   useEffect(() => {
     if (filteredLeagues.length > 0) {
@@ -277,10 +409,14 @@ export default function StandingsScreen() {
   }, [selectedSportId, leagues]);
 
   useEffect(() => {
-    if (!selectedLeague) { setStandings([]); setLoading(false); return; }
+    if (!selectedLeague) {
+      setStandings([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     getStandings(selectedLeague.id)
-      .then(res => setStandings(res.data))
+      .then((res) => setStandings(res.data))
       .catch(() => setStandings([]))
       .finally(() => setLoading(false));
   }, [selectedLeague]);
@@ -307,7 +443,7 @@ export default function StandingsScreen() {
       fetchSeasonData();
       if (selectedLeague) {
         getStandings(selectedLeague.id)
-          .then(res => setStandings(res.data))
+          .then((res) => setStandings(res.data))
           .catch(() => setStandings([]));
       }
     }, 3000);
@@ -317,15 +453,20 @@ export default function StandingsScreen() {
     Alert.alert("Удаление команды", `Удалить команду "${teamName}"?`, [
       { text: "Отмена", style: "cancel" },
       {
-        text: "Удалить", style: "destructive",
-        onPress: () => adminDeleteTeam(teamId)
-          .then(() => setStandings(prev => prev.filter(t => t.team_id !== teamId)))
-          .catch(() => Alert.alert("Ошибка", "Не удалось удалить команду"))
-      }
+        text: "Удалить",
+        style: "destructive",
+        onPress: () =>
+          adminDeleteTeam(teamId)
+            .then(() =>
+              setStandings((prev) => prev.filter((t) => t.team_id !== teamId)),
+            )
+            .catch(() => Alert.alert("Ошибка", "Не удалось удалить команду")),
+      },
     ]);
   };
 
-  const maxPoints = standings.length > 0 ? Math.max(...standings.map(s => s.points ?? 0)) : 1;
+  const maxPoints =
+    standings.length > 0 ? Math.max(...standings.map((s) => s.points ?? 0)) : 1;
 
   const renderLegend = () => {
     if (standings.length === 0) return null;
@@ -340,9 +481,13 @@ export default function StandingsScreen() {
       items = [{ color: "#00c853", label: "Зона Плей-офф" }];
     }
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.legendScroll}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.legendScroll}
+      >
         <View style={styles.legend}>
-          {items.map(z => (
+          {items.map((z) => (
             <View key={z.label} style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: z.color }]} />
               <Text style={styles.legendText}>{z.label}</Text>
@@ -358,24 +503,37 @@ export default function StandingsScreen() {
       <StatusBar barStyle="light-content" />
 
       <View style={styles.sportSelector}>
-        {SPORTS.map(sport => (
+        {SPORTS.map((sport) => (
           <TouchableOpacity
             key={sport.id}
-            style={[styles.sportBtn, selectedSportId === sport.id && styles.sportBtnActive]}
+            style={[
+              styles.sportBtn,
+              selectedSportId === sport.id && styles.sportBtnActive,
+            ]}
             onPress={() => setSelectedSportId(sport.id)}
           >
             <Text style={styles.sportIcon}>{sport.icon}</Text>
-            <Text style={[styles.sportText, selectedSportId === sport.id && styles.sportTextActive]}>{sport.name}</Text>
+            <Text
+              style={[
+                styles.sportText,
+                selectedSportId === sport.id && styles.sportTextActive,
+              ]}
+            >
+              {sport.name}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
 
       <View style={styles.leagueRow}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {filteredLeagues.map(l => (
+          {filteredLeagues.map((l) => (
             <TouchableOpacity
               key={l.id}
-              style={[styles.leagueBtn, selectedLeague?.id === l.id && styles.leagueActive]}
+              style={[
+                styles.leagueBtn,
+                selectedLeague?.id === l.id && styles.leagueActive,
+              ]}
               onPress={() => setSelectedLeague(l)}
               activeOpacity={0.7}
             >
@@ -409,7 +567,14 @@ export default function StandingsScreen() {
         {selectedSportId === 2 && <Text style={styles.statHeader}>ПО</Text>}
         <Text style={styles.statHeader}>П</Text>
         <Text style={styles.statHeader}>±</Text>
-        <Text style={[styles.statHeader, styles.pointsCol, { color: "#00c853" }, selectedSportId === 3 && { width: 40 }]}>
+        <Text
+          style={[
+            styles.statHeader,
+            styles.pointsCol,
+            { color: "#00c853" },
+            selectedSportId === 3 && { width: 40 },
+          ]}
+        >
           {selectedSportId === 3 ? "%В" : "О"}
         </Text>
       </View>
@@ -422,19 +587,25 @@ export default function StandingsScreen() {
       ) : (
         <FlatList
           data={standings}
-          keyExtractor={item => String(item.id || item.team_id)}
+          keyExtractor={(item) => String(item.id || item.team_id)}
           renderItem={({ item, index }) => (
             <RowItem
-              item={item} index={index} total={standings.length}
-              sportId={selectedSportId} maxPoints={maxPoints}
-              onDelete={handleDeleteTeam} isAdmin={isAdmin}
+              item={item}
+              index={index}
+              total={standings.length}
+              sportId={selectedSportId}
+              maxPoints={maxPoints}
+              onDelete={handleDeleteTeam}
+              isAdmin={isAdmin}
             />
           )}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <Text style={styles.emptyIcon}>📊</Text>
               <Text style={styles.emptyText}>Нет данных для этой лиги</Text>
-              <Text style={styles.emptyHint}>Данные появятся после завершения матчей</Text>
+              <Text style={styles.emptyHint}>
+                Данные появятся после завершения матчей
+              </Text>
             </View>
           }
           contentContainerStyle={{ paddingBottom: 20 }}
@@ -447,47 +618,82 @@ export default function StandingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#1a1a2e" },
   sportSelector: {
-    flexDirection: "row", backgroundColor: "#16213e",
-    paddingVertical: 10, justifyContent: "space-around",
-    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
+    flexDirection: "row",
+    backgroundColor: "#16213e",
+    paddingVertical: 10,
+    justifyContent: "space-around",
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2a4a",
   },
   sportBtn: { alignItems: "center", opacity: 0.6, padding: 5 },
-  sportBtnActive: { opacity: 1, borderBottomWidth: 2, borderBottomColor: "#00c853" },
+  sportBtnActive: {
+    opacity: 1,
+    borderBottomWidth: 2,
+    borderBottomColor: "#00c853",
+  },
   sportIcon: { fontSize: 24, marginBottom: 4 },
   sportText: { color: "#fff", fontSize: 12 },
   sportTextActive: { fontWeight: "bold", color: "#00c853" },
   leagueRow: { paddingHorizontal: 12, marginVertical: 8 },
   leagueBtn: {
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
-    backgroundColor: "#16213e", borderWidth: 1, borderColor: "#444", marginRight: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: "#16213e",
+    borderWidth: 1,
+    borderColor: "#444",
+    marginRight: 8,
   },
   leagueActive: { borderColor: "#00c853" },
   leagueBtnText: { color: "#ccc", fontSize: 11 },
 
   // AI Panel
   aiPanel: {
-    marginHorizontal: 12, marginBottom: 8, borderRadius: 12,
-    backgroundColor: "#16213e", borderWidth: 1, borderColor: "#2a2a4a",
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 12,
+    backgroundColor: "#16213e",
+    borderWidth: 1,
+    borderColor: "#2a2a4a",
     overflow: "hidden",
   },
   champRow: {
-    flexDirection: "row", alignItems: "center", padding: 12,
-    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2a4a",
   },
   champIcon: { fontSize: 24, marginRight: 10 },
   champLabel: { color: "#888", fontSize: 10, marginBottom: 2 },
   champName: { color: "#ffd700", fontSize: 15, fontWeight: "700" },
 
   countdownBox: {
-    alignItems: "center", padding: 16,
+    alignItems: "center",
+    padding: 16,
     backgroundColor: "#0f0f23",
   },
-  countdownTitle: { color: "#ffd700", fontSize: 14, fontWeight: "700", marginBottom: 4 },
+  countdownTitle: {
+    color: "#ffd700",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
   countdownSub: { color: "#888", fontSize: 11, marginBottom: 8 },
-  countdownTimer: { color: "#00c853", fontSize: 32, fontWeight: "900", letterSpacing: 2 },
+  countdownTimer: {
+    color: "#00c853",
+    fontSize: 32,
+    fontWeight: "900",
+    letterSpacing: 2,
+  },
 
   predictionSection: { padding: 12 },
-  predHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  predHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   predTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   predIcon: { fontSize: 16 },
   predTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
@@ -502,7 +708,11 @@ const styles = StyleSheet.create({
   predChampName: { color: "#a78bfa", fontSize: 15, fontWeight: "700" },
   confRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
   confBar: {
-    flex: 1, height: 4, backgroundColor: "#2a2a4a", borderRadius: 2, overflow: "hidden",
+    flex: 1,
+    height: 4,
+    backgroundColor: "#2a2a4a",
+    borderRadius: 2,
+    overflow: "hidden",
   },
   confFill: { height: 4, backgroundColor: "#7c3aed", borderRadius: 2 },
   confText: { color: "#888", fontSize: 10, width: 32, textAlign: "right" },
@@ -511,28 +721,73 @@ const styles = StyleSheet.create({
   expandBtnText: { color: "#7c3aed", fontSize: 11 },
   expandedContent: { marginTop: 8 },
   top3: { marginBottom: 8 },
-  top3Item: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 3 },
+  top3Item: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 3,
+  },
   top3Medal: { fontSize: 14 },
   top3Name: { color: "#ccc", fontSize: 12 },
-  reasoning: { color: "#888", fontSize: 11, lineHeight: 16, fontStyle: "italic" },
+  reasoning: {
+    color: "#888",
+    fontSize: 11,
+    lineHeight: 16,
+    fontStyle: "italic",
+  },
 
   legendScroll: { maxHeight: 30, backgroundColor: "#1a1a2e" },
-  legend: { flexDirection: "row", paddingHorizontal: 12, paddingBottom: 4, gap: 16 },
+  legend: {
+    flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingBottom: 4,
+    gap: 16,
+  },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { color: "#888", fontSize: 10 },
 
   tableHeader: {
-    flexDirection: "row", alignItems: "center", backgroundColor: "#16213e",
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#16213e",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2a4a",
   },
-  posHeader: { width: 28, color: "#aaa", fontSize: 11, textAlign: "center", fontWeight: "700" },
-  teamHeader: { flex: 1, color: "#aaa", fontSize: 11, fontWeight: "700", paddingLeft: 4 },
-  statHeader: { width: 30, color: "#aaa", fontSize: 11, textAlign: "center", fontWeight: "700" },
-  zoneStripe: { width: 3, alignSelf: "stretch", marginRight: 3, borderRadius: 2 },
+  posHeader: {
+    width: 28,
+    color: "#aaa",
+    fontSize: 11,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  teamHeader: {
+    flex: 1,
+    color: "#aaa",
+    fontSize: 11,
+    fontWeight: "700",
+    paddingLeft: 4,
+  },
+  statHeader: {
+    width: 30,
+    color: "#aaa",
+    fontSize: 11,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  zoneStripe: {
+    width: 3,
+    alignSelf: "stretch",
+    marginRight: 3,
+    borderRadius: 2,
+  },
   row: {
-    flexDirection: "row", alignItems: "center", paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#2a2a4a",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2a4a",
   },
   rowAlt: { backgroundColor: "#16213e" },
   posContainer: { width: 28, alignItems: "center" },
@@ -540,7 +795,13 @@ const styles = StyleSheet.create({
   teamContainer: { flex: 1, paddingLeft: 4, paddingRight: 6 },
   teamName: { color: "#fff", fontSize: 13, fontWeight: "600", flex: 1 },
   deleteBtnIcon: { fontSize: 11, opacity: 0.8, paddingHorizontal: 4 },
-  progressBg: { height: 2, backgroundColor: "#2a2a4a", borderRadius: 1, marginTop: 4, overflow: "hidden" },
+  progressBg: {
+    height: 2,
+    backgroundColor: "#2a2a4a",
+    borderRadius: 1,
+    marginTop: 4,
+    overflow: "hidden",
+  },
   progressFill: { height: 2, borderRadius: 1 },
   statCol: { width: 30, color: "#aaa", fontSize: 12, textAlign: "center" },
   pointsCol: { width: 30, color: "#fff", fontWeight: "800" },
