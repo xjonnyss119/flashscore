@@ -1,8 +1,9 @@
 const express = require("express");
-const axios = require("axios");
 const router = express.Router();
 const pool = require("../db/pool");
 const { requireAdmin } = require("../middleware/auth");
+// Подключаем официальный клиент Google Generative AI
+const { GoogleGenAI } = require("@google/generative-ai");
 
 router.get("/", async (req, res) => {
   try {
@@ -35,10 +36,9 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// ИСПРАВЛЕННЫЙ РОУТ ДЛЯ ИИ-ПРОГНОЗА (GOOGLE GEMINI API)
+// РОУТ ДЛЯ ИИ-ПРОГНОЗА ЧЕРЕЗ ОФИЦИАЛЬНЫЙ SDK GEMINI
 router.post("/ai-prediction", async (req, res) => {
   try {
-    // Получаем sportId из query, а готовые команды — из тела запроса (body)
     const sportId = parseInt(req.query.sportId) || 1;
     const currentTeams = req.body.teams;
 
@@ -48,12 +48,12 @@ router.post("/ai-prediction", async (req, res) => {
         .json({ error: "На бэкенд не переданы данные таблицы лиги" });
     }
 
-    // Подготовка массива для симуляции на основе пришедших с фронта данных
+    // Подготовка массива для симуляции
     let simulatedTable = currentTeams.map((t) => ({
       id: t.id || t.team_id,
       name: t.name || t.team_name,
       points: parseInt(t.points) || 0,
-      rating: parseInt(t.rating) || 50, // если рейтинга нет, оставляем базовый 50
+      rating: parseInt(t.rating) || 50,
     }));
 
     // Подгоняем массив под Round-Robin (Круговую систему)
@@ -131,13 +131,13 @@ router.post("/ai-prediction", async (req, res) => {
     const sportNames = { 1: "Футбольной", 2: "Хоккейной", 3: "Баскетбольной" };
     const currentSportName = sportNames[sportId] || "Спортивной";
 
-    // Промпт для генерации структурированного ответа
+    // Наш промпт для ИИ эксперта
     const systemPrompt = `Ты — топовый, харизматичный спортивный аналитик и эксперт. 
     Тебе предоставлена итоговая таблица ${currentSportName} лиги, полученная в результате математической симуляции оставшихся матчей сезона.
     Твоя задача — написать яркий, экспертный разбор итогов. Назови чемпиона, выдели главные сенсации (кто прыгнул выше головы) и главные провалы сезона. 
     Пиши живым языком, как пишут в спортивных медиа. Не используй сухие штампы.
     
-    Ты обязан вернуть ответ строго в формате JSON схемы:
+    Ты обязан вернуть ответ СТРОГО в формате JSON по следующей структуре:
     {
       "winner": "Точное название команды-чемпиона",
       "analysis": "Твой развернутый аналитический текст на русском языке..."
@@ -145,40 +145,37 @@ router.post("/ai-prediction", async (req, res) => {
 
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
-    // Стабильный URL-эндпоинт для gemini-1.5-flash
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    // Инициализируем GoogleGenAI с помощью ключа из .env
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Запрос к Google Gemini API
-    const response = await axios.post(
-      geminiUrl,
-      {
-        contents: [
-          {
-            parts: [{ text: `${systemPrompt}\n\nДанные:\n${userContent}` }],
-          },
-        ],
-        generationConfig: {
-          // ИСПРАВЛЕНО: Для v1beta пишется через нижнее подчеркивание!
-          response_mime_type: "application/json",
-          temperature: 0.6,
+    // Получаем доступ к генеративной модели gemini-1.5-flash через официальный метод
+    const model = ai.models.get("gemini-1.5-flash");
+
+    // Вызываем генерацию контента
+    const response = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\nДанные таблицы:\n${userContent}` },
+          ],
         },
+      ],
+      generationConfig: {
+        // Официальный параметр SDK для принудительного JSON режима
+        responseMimeType: "application/json",
+        temperature: 0.6,
       },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    });
 
-    // Достаем текст ответа из структуры ответа Google API
-    const textResponse = response.data.candidates[0].content.parts[0].text;
+    // Извлекаем чистый текст из ответа
+    const textResponse = response.text;
 
-    // Парсим в JSON и отправляем на фронтенд
+    // Парсим в JSON объект и отправляем на фронтенд в StandingsScreen
     const aiData = JSON.parse(textResponse);
     return res.status(200).json(aiData);
   } catch (error) {
-    // Выводим развернутый ответ от Google API в консоль, если что-то пойдет не так
-    console.error("AI Route Error:", error?.response?.data || error.message);
+    console.error("AI Route Error:", error.message || error);
     return res
       .status(500)
       .json({ error: "Ошибка модуля прогнозирования Gemini ИИ" });
