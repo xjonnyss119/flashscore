@@ -252,11 +252,8 @@ export default function StandingsScreen() {
 
   // ФУНКЦИЯ ОПРОСА СЕРВЕРНОГО ИИ-АНАЛИТИКА
   const handleFetchAiPrediction = async () => {
-    if (!selectedLeague) {
-      Alert.alert(
-        "Внимание",
-        "Пожалуйста, выберите лигу для генерации прогноза.",
-      );
+    if (!selectedLeague || standings.length === 0) {
+      Alert.alert("Внимание", "Нет данных для генерации прогноза.");
       return;
     }
 
@@ -264,16 +261,30 @@ export default function StandingsScreen() {
     setAiModalVisible(true);
 
     try {
+      // Меняем URL на твой рабочий хост на Render, когда зальешь туда бэк, либо локальный для тестов
+      // Передаем только sportId, а саму таблицу кидаем в body
       const response = await fetch(
-        `http://flashscore-backend-r1js.onrender.com/api/teams/ai-prediction?leagueId=${selectedLeague.id}&sportId=${selectedSportId}`,
+        `http://flashscore-backend-r1js.onrender.com/api/teams/ai-prediction?sportId=${selectedSportId}`,
+        {
+          method: "POST", // Меняем метод на POST
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ teams: standings }), // Передаем актуальные команды с очками
+        }
       );
+      
       const data = await response.json();
-      setAiResponse(data);
+      
+      if (response.ok) {
+        setAiResponse(data);
+      } else {
+        setAiResponse({ analysis: data.error || "Произошла ошибка при генерации прогноза." });
+      }
     } catch (error) {
       console.error("[FRONT] AI Fetch error:", error);
       setAiResponse({
-        analysis:
-          "Ошибка соединения с сервером предиктивной аналитики. Проверьте, запущен ли ваш бэкенд.",
+        analysis: "Ошибка соединения с сервером предиктивной аналитики. Проверьте сеть или статус бэкенда.",
       });
     } finally {
       setAiLoading(false);
