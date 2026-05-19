@@ -3,11 +3,11 @@ const router = express.Router();
 const pool = require("../db/pool");
 const { requireAdmin } = require("../middleware/auth");
 
-// ИСПРАВЛЕНО: Импортируем правильный класс GoogleGenAI из SDK
-// Альтернатива, если в твоем npm-пакете класс называется GoogleGenerativeAI
+// Подключаем официальный пакет Google AI
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Инициализируем клиент один раз глобально (передаем ключ напрямую в конструктор)
 const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 router.get("/", async (req, res) => {
   try {
@@ -40,7 +40,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// РОУТ ДЛЯ ИИ-ПРОГНОЗА ЧЕРЕЗ ИСПРАВЛЕННЫЙ SDK GEMINI
+// РОУТ ДЛЯ ИИ-ПРОГНОЗА (ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ)
 router.post("/ai-prediction", async (req, res) => {
   try {
     const sportId = parseInt(req.query.sportId) || 1;
@@ -149,11 +149,8 @@ router.post("/ai-prediction", async (req, res) => {
 
     const userContent = `Таблица после симуляции сезона: ${JSON.stringify(simulatedTable.map((t) => ({ name: t.name, points: t.points })))}`;
 
-    // ИСПРАВЛЕНО: Стабильный метод инициализации клиента GoogleGenAI
-    const ai = new GoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY });
-
-    // ИСПРАВЛЕНО: Получаем модель стандартным методом get()
-    const model = ai.models.get("gemini-1.5-flash");
+    // ИСПРАВЛЕНО: Получаем модель через железно поддерживаемый метод getGenerativeModel
+    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     // Вызываем генерацию контента
     const response = await model.generateContent({
@@ -171,8 +168,8 @@ router.post("/ai-prediction", async (req, res) => {
       },
     });
 
-    // Извлекаем чистый текст из ответа
-    const textResponse = response.text;
+    // Извлекаем чистый текст из ответа (библиотека сама отдает строку)
+    const textResponse = response.response.text();
 
     // Парсим в JSON объект и отправляем на фронтенд
     const aiData = JSON.parse(textResponse);
