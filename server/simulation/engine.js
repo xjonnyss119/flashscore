@@ -92,15 +92,26 @@ async function generateRoundRobinMatch(leagueId, sportId) {
   try {
     const pair = await getNextRoundRobinPair(leagueId, sportId);
     console.log(`[SIM] League ${leagueId}: generateRoundRobinMatch pair=`, pair ? (pair.seasonComplete ? 'seasonComplete' : `${pair.home?.id} vs ${pair.away?.id}`) : 'null');
-    if (!pair) return;
+    if (!pair) return false;
     if (pair.seasonComplete) {
       await handleSeasonComplete(leagueId, sportId);
-      return;
+      return false;
     }
 
     const { home, away } = pair;
     const delayMinutes = Math.floor(Math.random() * 6) + 2;
     const startTime = new Date(Date.now() + delayMinutes * 60 * 1000);
+
+    // Защита от дублирования: проверяем что эта пара не висит уже в scheduled/live
+    const dupCheck = await pool.query(
+      `SELECT id FROM matches WHERE league_id = $1 AND status IN ('scheduled','live')
+       AND ((home_team_id = $2 AND away_team_id = $3) OR (home_team_id = $3 AND away_team_id = $2))`,
+      [leagueId, home.id, away.id]
+    );
+    if (dupCheck.rows.length > 0) {
+      console.log(`[SIM][RR] Лига ${leagueId}: пара ${home.id} vs ${away.id} уже в очереди, пропускаем`);
+      return false;
+    }
 
     await pool.query(
       `INSERT INTO matches (home_team_id, away_team_id, league_id, sport_id, start_time, status, home_score, away_score, minute, updated_at)
@@ -109,8 +120,10 @@ async function generateRoundRobinMatch(leagueId, sportId) {
     );
 
     console.log(`[SIM][RR] Лига ${leagueId}: команды ${home.id} vs ${away.id}`);
+    return true;
   } catch (err) {
     console.error("[SIM][RR] Generation error:", err.message);
+    return false;
   }
 }
 
@@ -409,9 +422,19 @@ async function runSimulationTick() {
 
       console.log(`[SIM] League ${leagueId}: live=${live} sched=${sched}`);
 
-      // Создаём новый матч если суммарно меньше 2 (было 3, снижено чтобы не блокировать)
-      if (live + sched < 2) {
-        await generateRoundRobinMatch(leagueId, sportId);
+      // Держим очередь: минимум 2 scheduled матча на лигу.
+      // Читаем sched заново из БД перед циклом — на случай если сервер
+      // перезапустился и в БД уже есть scheduled матчи (иначе будет задвоение).
+      const schedCheck = await pool.query(
+        "SELECT COUNT(*) FROM matches WHERE league_id = $1 AND status = 'scheduled'",
+        [leagueId]
+      );
+      let schedActual = parseInt(schedCheck.rows[0].count, 10);
+
+      while (schedActual < 2) {
+        const generated = await generateRoundRobinMatch(leagueId, sportId);
+        if (!generated) break; // сезон завершён или пар нет
+        schedActual++;
       }
 
       // Запускаем все просроченные scheduled матчи
