@@ -97,11 +97,15 @@ function AIPredictionPanel({
       let data = res.data;
       // Защита на случай если сервер вернул строку вместо объекта
       if (typeof data === "string") {
-        try { data = JSON.parse(data); } catch {}
+        try {
+          data = JSON.parse(data);
+        } catch {}
       }
       // Если пришёл fallback { prediction: "строка" } — пробуем распарсить
       if (data && typeof data.prediction === "string" && !data.champion) {
-        try { data = JSON.parse(data.prediction); } catch {}
+        try {
+          data = JSON.parse(data.prediction);
+        } catch {}
       }
       setPrediction(data);
     } catch (e) {
@@ -481,11 +485,7 @@ export default function StandingsScreen() {
       items = [{ color: "#00c853", label: "Зона Плей-офф" }];
     }
     return (
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.legendScroll}
-      >
+      <View style={styles.legendScroll}>
         <View style={styles.legend}>
           {items.map((z) => (
             <View key={z.label} style={styles.legendItem}>
@@ -494,7 +494,7 @@ export default function StandingsScreen() {
             </View>
           ))}
         </View>
-      </ScrollView>
+      </View>
     );
   };
 
@@ -736,11 +736,13 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
 
-  legendScroll: { maxHeight: 30, backgroundColor: "#1a1a2e" },
+  legendScroll: {
+    marginBottom: 8,
+    paddingHorizontal: 12,
+  },
   legend: {
     flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingBottom: 4,
+    flexWrap: "wrap",
     gap: 16,
   },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "d63cd80e-d495-4d56-a507-f65c7bd67213"
+      }
+    },
+    "android": {
+      "package": "com.xjonnys.flashscoreapp"
+    }
+  }
+}
