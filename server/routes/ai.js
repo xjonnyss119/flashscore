@@ -12,31 +12,33 @@ async function callGemini(prompt) {
       contents: [
         {
           role: "user",
-          parts: [{ text: prompt }],
-        },
+          parts: [{ text: prompt }]
+        }
       ],
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 512,
-      },
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json"
+      }
     },
     {
-      headers: { "Content-Type": "application/json" },
-    },
+      headers: { "Content-Type": "application/json" }
+    }
   );
 
   if (response.data?.error) {
     throw new Error(response.data.error.message);
   }
 
-  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const parts = response.data?.candidates?.[0]?.content?.parts;
+  const text = parts?.map(p => p.text || "").join("\n").trim();
 
   if (!text) {
     console.log("RAW GEMINI:", JSON.stringify(response.data, null, 2));
     throw new Error("Gemini вернул пустой ответ");
   }
 
-  return text.trim();
+  return text;
 }
 
 // GET /api/ai/prediction/:leagueId
