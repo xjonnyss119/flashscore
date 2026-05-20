@@ -4,21 +4,21 @@ const pool = require("../db/pool");
 const axios = require("axios");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
 async function callGemini(prompt) {
   const response = await axios.post(
     GEMINI_URL,
     {
       contents: [
         {
-          role: "user",
           parts: [{ text: prompt }]
         }
       ],
-      generation_сonfig: {
+      generationConfig: {
         temperature: 0.3,
-        max_output_tokens: 2048,
-        response_mime_type: "application/json"
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json"
       }
     },
     {
@@ -26,17 +26,8 @@ async function callGemini(prompt) {
     }
   );
 
-  if (response.data?.error) {
-    throw new Error(response.data.error.message);
-  }
-
   const parts = response.data?.candidates?.[0]?.content?.parts;
   const text = parts?.map(p => p.text || "").join("\n").trim();
-
-  if (!text) {
-    console.log("RAW GEMINI:", JSON.stringify(response.data, null, 2));
-    throw new Error("Gemini вернул пустой ответ");
-  }
 
   return text;
 }
