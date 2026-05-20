@@ -43,7 +43,6 @@ function getZoneColor(index, total, sportId) {
   return "transparent";
 }
 
-// ───── Countdown timer component ─────
 function SeasonCountdown({ nextSeasonAt, onSeasonStart }) {
   const [secondsLeft, setSecondsLeft] = useState(0);
 
@@ -75,7 +74,6 @@ function SeasonCountdown({ nextSeasonAt, onSeasonStart }) {
   );
 }
 
-// ───── AI Prediction Panel ─────
 function AIPredictionPanel({
   leagueId,
   champName,
@@ -95,13 +93,11 @@ function AIPredictionPanel({
     try {
       const res = await getAIPrediction(leagueId);
       let data = res.data;
-      // Защита на случай если сервер вернул строку вместо объекта
       if (typeof data === "string") {
         try {
           data = JSON.parse(data);
         } catch {}
       }
-      // Если пришёл fallback { prediction: "строка" } — пробуем распарсить
       if (data && typeof data.prediction === "string" && !data.champion) {
         try {
           data = JSON.parse(data.prediction);
@@ -240,7 +236,6 @@ function AIPredictionPanel({
   );
 }
 
-// ───── Row ─────
 function RowItem({
   item,
   index,
@@ -363,7 +358,6 @@ function RowItem({
   );
 }
 
-// ───── Main Screen ─────
 export default function StandingsScreen() {
   const [leagues, setLeagues] = useState([]);
   const [selectedSportId, setSelectedSportId] = useState(1);
@@ -425,7 +419,6 @@ export default function StandingsScreen() {
       .finally(() => setLoading(false));
   }, [selectedLeague]);
 
-  // Polling season data
   const fetchSeasonData = useCallback(async () => {
     if (!selectedLeague) return;
     try {
@@ -442,7 +435,6 @@ export default function StandingsScreen() {
   }, [selectedLeague]);
 
   const handleSeasonStart = useCallback(() => {
-    // Новый сезон стартовал — обновляем всё
     setTimeout(() => {
       fetchSeasonData();
       if (selectedLeague) {
@@ -543,7 +535,6 @@ export default function StandingsScreen() {
         </ScrollView>
       </View>
 
-      {/* AI + Champion Panel */}
       {selectedLeague && (
         <AIPredictionPanel
           leagueId={selectedLeague.id}
@@ -647,7 +638,6 @@ const styles = StyleSheet.create({
   leagueActive: { borderColor: "#00c853" },
   leagueBtnText: { color: "#ccc", fontSize: 11 },
 
-  // AI Panel
   aiPanel: {
     marginHorizontal: 12,
     marginBottom: 8,

@@ -59,7 +59,6 @@ async function getNextRoundRobinPair(leagueId, sportId) {
       pairCount[key] = (pairCount[key] || 0) + 1;
     });
 
-    // Команды которые отстают (ещё не сыграли текущий круг)
     const teamsInCurrentRound = teams.filter(t => (playedMap[t.id] || 0) === minPlayed);
     const available = teamsInCurrentRound.filter(t => !busyTeams.has(t.id));
     if (available.length < 2) return null;
@@ -102,7 +101,6 @@ async function generateRoundRobinMatch(leagueId, sportId) {
     const delayMinutes = Math.floor(Math.random() * 6) + 2;
     const startTime = new Date(Date.now() + delayMinutes * 60 * 1000);
 
-    // Защита от дублирования: проверяем что эта пара не висит уже в scheduled/live
     const dupCheck = await pool.query(
       `SELECT id FROM matches WHERE league_id = $1 AND status IN ('scheduled','live')
        AND ((home_team_id = $2 AND away_team_id = $3) OR (home_team_id = $3 AND away_team_id = $2))`,
@@ -392,7 +390,6 @@ async function runSimulationTick() {
   try {
     console.log("[SIM] Tick started");
 
-    // 1. Запускаем новые сезоны по таймеру
     const countdownSeasons = await pool.query(
       "SELECT league_id FROM seasons WHERE status = 'countdown' AND next_season_at <= NOW()"
     );
@@ -400,7 +397,6 @@ async function runSimulationTick() {
       await startNewSeason(row.league_id);
     }
 
-    // 2. Обрабатываем каждую лигу
     const leaguesRes = await pool.query("SELECT l.id, l.sport_id FROM leagues l");
     for (const league of leaguesRes.rows) {
       const leagueId = league.id;
@@ -422,9 +418,6 @@ async function runSimulationTick() {
 
       console.log(`[SIM] League ${leagueId}: live=${live} sched=${sched}`);
 
-      // Держим очередь: минимум 2 scheduled матча на лигу.
-      // Читаем sched заново из БД перед циклом — на случай если сервер
-      // перезапустился и в БД уже есть scheduled матчи (иначе будет задвоение).
       const schedCheck = await pool.query(
         "SELECT COUNT(*) FROM matches WHERE league_id = $1 AND status = 'scheduled'",
         [leagueId]
@@ -433,11 +426,10 @@ async function runSimulationTick() {
 
       while (schedActual < 2) {
         const generated = await generateRoundRobinMatch(leagueId, sportId);
-        if (!generated) break; // сезон завершён или пар нет
+        if (!generated) break;
         schedActual++;
       }
 
-      // Запускаем все просроченные scheduled матчи
       const ready = await pool.query(
         "SELECT id FROM matches WHERE league_id = $1 AND status = 'scheduled' AND start_time <= NOW() ORDER BY start_time ASC",
         [leagueId]
@@ -451,14 +443,12 @@ async function runSimulationTick() {
       }
     }
 
-    // 3. Тикаем live матчи
     const liveMatches = await pool.query("SELECT * FROM matches WHERE status = 'live'");
     console.log(`[SIM] Ticking ${liveMatches.rows.length} live matches`);
     for (const match of liveMatches.rows) {
       await tickMatch(match);
     }
 
-    // 4. Глобальная чистка
     const countRes = await pool.query("SELECT COUNT(*) FROM matches");
     if (parseInt(countRes.rows[0].count, 10) >= 100) {
       await pool.query(`DELETE FROM matches WHERE id IN (SELECT id FROM matches WHERE status='finished' ORDER BY updated_at ASC LIMIT 30)`);

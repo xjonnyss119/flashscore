@@ -83,7 +83,6 @@ export const getSimulationStatus = () => api.get("/admin/simulation/status");
 export const startSimulation = () => api.post("/admin/simulation/start");
 export const stopSimulation = () => api.post("/admin/simulation/stop");
 
-// AI & Season
 export const getAIPrediction = (leagueId) => api.get(`/ai/prediction/${leagueId}`);
 export const refreshAIPrediction = (leagueId) => api.post(`/ai/prediction/${leagueId}/refresh`);
 export const resetAllAIPredictions = () => api.post(`/ai/prediction/reset-all`);

@@ -64,13 +64,10 @@ app.listen(PORT, async () => {
   simulation.startSimulation();
 });
 
-// Keep-alive: пингуем сами себя каждые 10 минут чтобы Render не засыпал
-// и симуляция не останавливалась
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 setInterval(async () => {
   try {
     await axios.get(`${SELF_URL}/api/health`);
-    // Если симуляция остановилась (после сна) — перезапускаем
     if (!simulation.isRunning()) {
       console.log("[KEEPALIVE] Simulation was stopped, restarting...");
       simulation.startSimulation();

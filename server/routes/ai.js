@@ -32,15 +32,13 @@ async function callGemini(prompt) {
   return text;
 }
 
-// GET /api/ai/prediction/:leagueId
-// Возвращает прогноз ИИ. Если кэш свежий (<5 мин) — из БД, иначе запрашивает Gemini
+
 router.get("/prediction/:leagueId", async (req, res) => {
   const leagueId = parseInt(req.params.leagueId, 10);
   if (isNaN(leagueId))
     return res.status(400).json({ error: "Неверный ID лиги" });
 
   try {
-    // Проверяем кэш
     const seasonRes = await pool.query(
       "SELECT ai_prediction, ai_prediction_updated FROM seasons WHERE league_id = $1",
       [leagueId],
@@ -55,15 +53,12 @@ router.get("/prediction/:leagueId", async (req, res) => {
       if (ai_prediction && cacheAge < 60 * 60 * 1000) {
         try {
           let parsed = JSON.parse(ai_prediction);
-          // Защита от двойной сериализации: если внутри снова строка — парсим ещё раз
           if (typeof parsed === "string") parsed = JSON.parse(parsed);
-          // Если объект не содержит нужных полей — считаем кэш битым
           if (!parsed || typeof parsed !== "object" || !parsed.champion) {
             throw new Error("invalid cache structure");
           }
           return res.json(parsed);
         } catch {
-          // Битый кэш — сбрасываем и идём к Gemini
           await pool.query(
             "UPDATE seasons SET ai_prediction = NULL, ai_prediction_updated = NULL WHERE league_id = $1",
             [leagueId],
@@ -72,7 +67,6 @@ router.get("/prediction/:leagueId", async (req, res) => {
       }
     }
 
-    // Собираем данные для Gemini
     const leagueRes = await pool.query(
       "SELECT l.name, l.sport_id, s.name as sport_name FROM leagues l JOIN sports s ON l.sport_id = s.id WHERE l.id = $1",
       [leagueId],
@@ -114,7 +108,6 @@ router.get("/prediction/:leagueId", async (req, res) => {
       });
     }
 
-    // Формируем промпт
     const standingsText = standings
       .map((t, i) => {
         const gd = (t.goals_for || 0) - (t.goals_against || 0);
@@ -205,7 +198,6 @@ ${standingsText}
   }
 });
 
-// POST /api/ai/prediction/reset-all — сбрасывает кэш всех лиг (для починки битых данных)
 router.post("/prediction/reset-all", async (req, res) => {
   try {
     const result = await pool.query(
@@ -236,9 +228,7 @@ router.post("/prediction/:leagueId/refresh", async (req, res) => {
   }
 });
 
-// GET /api/ai/season/:leagueId
-// Данные сезона: действующий чемпион, статус, таймер обратного отсчёта
-router.get("/season/:leagueId", async (req, res) => {
+  router.get("/season/:leagueId", async (req, res) => {
   const leagueId = parseInt(req.params.leagueId, 10);
   if (isNaN(leagueId))
     return res.status(400).json({ error: "Неверный ID лиги" });
