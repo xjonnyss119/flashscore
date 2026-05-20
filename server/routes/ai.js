@@ -164,19 +164,26 @@ ${standingsText}
     const geminiResponse = await callGemini(prompt);
 
     let prediction;
+
     try {
-      // Убираем markdown-обёртку ```json ... ``` если Gemini добавил её
       const cleaned = geminiResponse
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/, "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
         .trim();
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      prediction = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
-      // Проверяем что reasoning — чистая строка, а не JSON
-      if (prediction.reasoning && prediction.reasoning.trim().startsWith("{")) {
-        prediction.reasoning = "Прогноз сформирован на основе текущей таблицы.";
+
+      const jsonStart = cleaned.indexOf("{");
+      const jsonEnd = cleaned.lastIndexOf("}") + 1;
+
+      if (jsonStart === -1 || jsonEnd === -1) {
+        throw new Error("JSON not found in Gemini response");
       }
-    } catch {
+
+      const jsonString = cleaned.slice(jsonStart, jsonEnd);
+      prediction = JSON.parse(jsonString);
+    } catch (e) {
+      console.error("FAILED TO PARSE GEMINI:");
+      console.error(geminiResponse);
+
       prediction = {
         champion: standings[0]?.name || null,
         top3: standings.slice(0, 3).map((t) => t.name),
